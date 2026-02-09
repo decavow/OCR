@@ -1,0 +1,40 @@
+# === Environment ===
+**/.env
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+
+# === Node.js ===
+node_modules/
+
+# === Frontend build ===
+frontend/dist/
+
+# === Data (runtime volumes) ===
+data/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === OS ===
+.DS_Store
+Thumbs.db
+nul
+
+# === Docker ===
+*.log
+
+# === Project-specific ===
+collection_tool.py
+ocr.md
+ocr_structure.md

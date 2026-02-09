@@ -1,0 +1,188 @@
+# GET /jobs/:id, /jobs/:id/result (text content)
+
+import json
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
+from sqlalchemy.orm import Session
+
+from app.api.v1.schemas.job import JobResponse, JobResultResponse, JobResultMetadata
+from app.api.deps import get_current_user, get_db, get_storage
+from app.infrastructure.database.repositories import JobRepository, RequestRepository, FileRepository
+from app.infrastructure.storage.exceptions import ObjectNotFoundError
+from app.config import settings
+
+router = APIRouter()
+
+
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get job status."""
+    job_repo = JobRepository(db)
+    request_repo = RequestRepository(db)
+
+    # Get job
+    job = job_repo.get_active(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check ownership via request
+    request = request_repo.get_active(job.request_id)
+    if not request or request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Parse error history
+    error_history = []
+    if job.error_history:
+        try:
+            error_history = json.loads(job.error_history)
+        except:
+            pass
+
+    return JobResponse(
+        id=job.id,
+        request_id=job.request_id,
+        file_id=job.file_id,
+        status=job.status,
+        method=job.method,
+        tier=job.tier,
+        retry_count=job.retry_count,
+        max_retries=job.max_retries,
+        error_history=error_history,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        processing_time_ms=job.processing_time_ms,
+        result_path=job.result_path,
+        worker_id=job.worker_id,
+        created_at=job.created_at,
+    )
+
+
+@router.get("/{job_id}/result")
+async def get_job_result(
+    job_id: str,
+    format: str = "text",  # text, json, raw
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage),
+    current_user=Depends(get_current_user),
+):
+    """Get job result (text content)."""
+    job_repo = JobRepository(db)
+    request_repo = RequestRepository(db)
+
+    # Get job
+    job = job_repo.get_active(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check ownership via request
+    request = request_repo.get_active(job.request_id)
+    if not request or request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check if job is completed
+    if job.status != "COMPLETED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not completed. Current status: {job.status}"
+        )
+
+    # Check if result exists
+    if not job.result_path:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    # Download result from MinIO
+    try:
+        content = await storage.download(settings.minio_bucket_results, job.result_path)
+    except ObjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Result file not found in storage")
+
+    text = content.decode("utf-8")
+
+    # Return based on format
+    if format == "raw":
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f'attachment; filename="result_{job_id}.txt"'}
+        )
+
+    if format == "json" or request.output_format == "json":
+        # Try to parse as JSON if output_format was json
+        try:
+            data = json.loads(text)
+            return data
+        except json.JSONDecodeError:
+            pass
+
+    # Return structured response
+    lines = text.strip().split("\n") if text.strip() else []
+    return JobResultResponse(
+        text=text,
+        lines=len(lines),
+        metadata=JobResultMetadata(
+            method=job.method,
+            tier=str(job.tier),
+            processing_time_ms=job.processing_time_ms or 0,
+            version="1.0",
+        )
+    )
+
+
+@router.get("/{job_id}/download")
+async def download_job_result(
+    job_id: str,
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage),
+    current_user=Depends(get_current_user),
+):
+    """Download job result as file."""
+    job_repo = JobRepository(db)
+    request_repo = RequestRepository(db)
+    file_repo = FileRepository(db)
+
+    # Get job
+    job = job_repo.get_active(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check ownership via request
+    request = request_repo.get_active(job.request_id)
+    if not request or request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check if job is completed
+    if job.status != "COMPLETED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not completed. Current status: {job.status}"
+        )
+
+    if not job.result_path:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    # Get original filename
+    file = file_repo.get(job.file_id)
+    original_name = file.original_name if file else "result"
+    base_name = original_name.rsplit(".", 1)[0]
+
+    # Determine extension
+    ext = "json" if request.output_format == "json" else "txt"
+    filename = f"{base_name}_result.{ext}"
+
+    # Download from MinIO
+    try:
+        content = await storage.download(settings.minio_bucket_results, job.result_path)
+    except ObjectNotFoundError:
+        raise HTTPException(status_code=404, detail="Result file not found")
+
+    content_type = "application/json" if ext == "json" else "text/plain"
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )

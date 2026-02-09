@@ -1,0 +1,194 @@
+# OCR High-Level System Architecture
+
+---
+
+## Table of Contents
+
+---
+
+## 1. Executive Summary
+- Đây là hệ thống nhận diện ký tự (OCR) được xây dựng để nhận diện và convert thông tin từ file upload của người dùng 
+- Hệ thống được xây dựng dựa trên các nguyên tắc thiết kế tập trung vào việc bảo mật dữ liệu và serverless. Tránh việc các module lưu lại thông tin 
+- Triển khai theo kiến trúc orchestration nơi có một module chuyên để điều phối luồng dữ liệu giữa các service
+- Triển khai sử dụng hạ tầng cloud
+### Design Principles
+| Principle | Description |
+|-----------|-------------|
+| **Serverless** | Giảm thiếu khả năng các service biết được công việc của nhau |
+| **Save cost** | Tối ưu chi phí khi triển khai hạ tầng cloud |
+| **Security** | Bảo mật dữ liệu và tránh rủi ro bị tấn công, đánh cắp thông tin |
+| **Scalable** | Hệ thống có thể mở rộng khi cần |
+
+### Key Features
+
+---
+
+## 2. Architecture Overview
+
+### Architectural Style
+
+### High-level Architecture Diagram
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         CLOUDFLARE                               │
+│                         (Website)                                │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ Upload PDF
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                            GCP                                   │
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
+│  │Cloud Storage │───▶│Cloud Function│───▶│  Pub/Sub     │       │
+│  │ (PDF input)  │    │ (Trigger)    │    │  (Queue)     │       │
+│  └──────────────┘    └──────────────┘    └──────┬───────┘       │
+│                                                  │               │
+│  ┌──────────────┐    ┌──────────────┐           │               │
+│  │  Firestore   │◀───│Cloud Function│◀──────────┤               │
+│  │ (Job State)  │    │ (On Result)  │           │               │
+│  └──────────────┘    └──────────────┘           │               │
+│                                                  │               │
+│  ┌──────────────┐                               │               │
+│  │   Cloud      │── Mỗi 5 phút ──────┐          │               │
+│  │  Scheduler   │                    │          │               │
+│  └──────────────┘                    ▼          │               │
+│                             ┌──────────────┐    │               │
+│                             │Cloud Function│    │               │
+│                             │(Scale Vast)  │    │               │
+│                             └──────┬───────┘    │               │
+│                                    │            │               │
+└────────────────────────────────────┼────────────┼───────────────┘
+                                     │            │
+                                     ▼            ▼
+                          ┌─────────────────────────────┐
+                          │         VAST.AI             │
+                          │                             │
+                          │  ┌───────────────────────┐  │
+                          │  │   Docker Container    │  │
+                          │  │   - Pull job từ Pub/Sub│  │
+                          │  │   - OCR processing    │  │
+                          │  │   - Push result về GCS│  │
+                          │  └───────────────────────┘  │
+                          │                             │
+                          └─────────────────────────────┘
+```                          
+                
+
+### Danh sách các thành phần chính và trách nhiệm
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              SYSTEM ARCHITECTURE                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────┐      ┌─────────────────────┐      ┌─────────────────────┐
+│     CLOUDFLARE      │      │         GCP         │      │      COMPUTE        │
+│   (Client Domain)   │      │  (Management Domain)│      │   (Compute Domain)  │
+│                     │      │                     │      │                     │
+│  ┌───────────────┐  │      │  ┌───────────────┐  │      │  ┌───────────────┐  │
+│  │   Website     │──┼──────┼─▶│ Orchestrator  │◀─┼─────│  | TIER 1        │  │
+│  │   (Workers)   │  │      │  │     API       │  │      │  │ Vast.ai DC    │  │
+│  └───────────────┘  │      │  └───────┬───────┘  │      │  │ (Public data) │  │
+│                     │      │          │         │      │  └───────────────┘  │
+│  ┌───────────────┐  │      │          │         │      │                     │
+│  │      R2       │◀─┼──────┼──────────┘         │      │  ┌───────────────┐  │
+│  │   (Storage)   │  │      │                     │      │  │   TIER 2-3    │  │
+│  │   FREE Egress │  │      │  ┌───────────────┐  │      │  │ RunPod Secure │  │
+│  └───────────────┘  │      │  │  Firestore    │  │      │  │ (SOC 2)       │  │
+│                     │      │  │   (State)     │  │      │  └───────────────┘  │
+│                     │      │  └───────────────┘  │      │                     │
+│                     │      │                     │      │  ┌───────────────┐  │
+│                     │      │  ┌───────────────┐  │      │  │   TIER 4      │  │
+│                     │      │  │   Airflow     │──┼─────▶│  │ VIP Dedicated │  │
+│                     │      │  │  (Auto-scale) │  │      │  │ (CMND, HĐ)    │  │
+│                     │      │  └───────────────┘  │      │  └───────────────┘  │
+│                     │      │                     │      │                     │
+│                     │      │  ┌───────────────┐  │      │  ← All TIERs pull  │
+│                     │      │  │ Admin Portal  │  │      │    jobs from       │
+│                     │      │  │  (Config)     │  │      │    Orchestrator    │
+│                     │      │  └───────────────┘  │      │                     │
+└─────────────────────┘      └─────────────────────┘      └─────────────────────┘
+``` 
+Mô tả hệ thống:
+- Người dùng sẽ upload dữ liệu lên website tại cloudfare 
+- Sau khi được upload tài liệu raw sẽ được lưu trữ tại R2 dưới dạng object storage
+---
+
+## 3. Technology Stack
+*Định hướng công việc cho mảng tech*
+- em: PO -> định hương sản phẩm như nào và chịu trách nhiệm cho chất lượng
+- anh: co-PO -> tư vấn giải pháp, brainstorming về mặt kiến trúc sản phẩm
+
+*Mô hình làm việc sắp tới*
+- Quản lý tâp trung tài liệu trên GitHub. Tạo một file `work_report.md` để báo cáo tiến độ công việc hàng ngày, từ đó dùng AI để quản lý task theo ngày. Đảm bảo log task đều đặn mỗi ngày
+- Chuyển nhà qua telegram để có noti
+- Mô hình Ai hỏi -> người trả lời -> mỗi ngày sẽ hỏi 10 câu sáng + 10 câu tối liên quan đến sản phẩm
+- Self-host các mô hình ASR để convert voice to text trong các cuộc họp -> từ đó viết MoM bằng AI
+=> Strategy chung: Tự động hoá các task bằng AI nhiều nhất có thể
+
+---
+
+## 4. Data Architecture
+
+### Domain Model Overview
+
+### Chiến lược lưu trữ
+
+### Data Flow
+
+---
+
+## 5. Integration & Communication
+
+### Giao tiếp nội bộ
+
+### Message Queue Architecture
+
+### Tích hợp hệ thống bên ngoài
+
+### API Design Principles
+
+---
+
+## 6. Infrastructure & Deployment
+
+### Deployment Architecture
+
+### Container Orchestration
+
+### Environments
+
+### CI/CD Pipeline Overview
+
+---
+
+## 7. Security
+
+### Authentication & Authorization
+
+### Data Protection
+
+### Security Controls
+
+---
+
+## 8. Non-Functional Requirements
+
+### Performance Targets
+
+### Scalability Strategy
+
+### Availability & Disaster Recovery
+
+### Monitoring & Alerting
+
+---
+
+## 9. Risks & Trade-offs
+
+### Kiến trúc Trade-offs đã chấp nhận
+
+### Rủi ro chính và giảm thiểu
+
+### Technical Debt đã biết
+
+---

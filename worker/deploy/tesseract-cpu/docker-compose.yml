@@ -1,0 +1,23 @@
+# OCR Worker - Tesseract (CPU-only, lightweight)
+#
+# Usage (from project root):
+#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml up -d
+#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml up -d --scale worker-tesseract=3
+#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml down
+
+services:
+  worker-tesseract:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.cpu
+    env_file:
+      - ../../../.env
+      - .env
+    stop_grace_period: 60s
+    networks:
+      - ocr-network
+
+networks:
+  ocr-network:
+    external: true
+    name: ocr-network

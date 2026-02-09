@@ -1,0 +1,29 @@
+# FastAPI and ASGI
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Database
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+
+# Validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+email-validator>=2.1.0
+
+# Authentication
+bcrypt>=4.1.0
+python-jose[cryptography]>=3.3.0
+
+# Storage (MinIO)
+minio>=7.2.0
+
+# Message Queue (NATS)
+nats-py>=2.6.0
+
+# HTTP Client
+httpx>=0.25.0
+
+# Utilities
+python-multipart>=0.0.6
+python-dotenv>=1.0.0

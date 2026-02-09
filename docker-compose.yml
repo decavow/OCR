@@ -1,0 +1,87 @@
+# OCR Platform - Infrastructure + Backend
+#
+# This file contains only infrastructure and backend services.
+# Workers are managed separately - see worker/deploy/<name>/docker-compose.yml
+#
+# Usage:
+#   docker-compose up -d                    # Start infrastructure + backend
+#   docker-compose logs -f backend          # View backend logs
+#   docker-compose down                     # Stop all
+#
+# Workers (each in worker/deploy/<name>/ folder):
+#   docker-compose -f worker/deploy/paddle-text/docker-compose.yml up -d      # PaddleOCR (GPU)
+#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml up -d    # Tesseract (CPU)
+
+services:
+  # === INFRASTRUCTURE ===
+  minio:
+    image: minio/minio:latest
+    container_name: ocr-minio
+    ports:
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./data/minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    networks:
+      - ocr-network
+
+  nats:
+    image: nats:latest
+    container_name: ocr-nats
+    ports:
+      - "${NATS_PORT}:4222"
+      - "${NATS_MONITOR_PORT}:8222"
+    command: ["--jetstream", "--store_dir=/data", "-m", "8222"]
+    volumes:
+      - ./data/nats:/data
+    networks:
+      - ocr-network
+
+  # === BACKEND ===
+  backend:
+    build: ./backend
+    container_name: ocr-backend
+    ports:
+      - "${BACKEND_PORT}:8000"
+    environment:
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_BUCKET_UPLOADS=${MINIO_BUCKET_UPLOADS}
+      - MINIO_BUCKET_RESULTS=${MINIO_BUCKET_RESULTS}
+      - MINIO_BUCKET_DELETED=${MINIO_BUCKET_DELETED}
+      - NATS_URL=${NATS_URL}
+      - NATS_STREAM_NAME=${NATS_STREAM_NAME}
+      - DATABASE_URL=${DATABASE_URL}
+      # NOTE: Seed services are a DEV CONVENIENCE for local development.
+      # In production, workers register dynamically and admin approves.
+      # Format: type_id:access_key:methods:tiers (comma-separated for multiple)
+      - SEED_SERVICES=${SEED_SERVICES}
+    depends_on:
+      minio:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ocr-network
+
+networks:
+  ocr-network:
+    name: ocr-network
+    driver: bridge

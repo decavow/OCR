@@ -1,0 +1,30 @@
+# OCR Worker - PaddleOCR (GPU)
+#
+# Usage (from project root):
+#   docker-compose -f worker/deploy/paddle-text/docker-compose.yml up -d
+#   docker-compose -f worker/deploy/paddle-text/docker-compose.yml up -d --scale worker-paddle=3
+#   docker-compose -f worker/deploy/paddle-text/docker-compose.yml down
+
+services:
+  worker-paddle:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    env_file:
+      - ../../../.env
+      - .env
+    stop_grace_period: 60s
+    networks:
+      - ocr-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  ocr-network:
+    external: true
+    name: ocr-network

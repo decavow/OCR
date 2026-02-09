@@ -1,0 +1,19 @@
+# Shared dependencies for all workers
+# Engine-specific packages (paddleocr, pytesseract...) are installed in Dockerfile
+
+# NATS
+nats-py>=2.6.0
+
+# HTTP Client
+httpx>=0.25.0
+
+# Image processing
+Pillow>=10.1.0
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+
+# PDF support
+pdf2image>=1.16.0
+
+# Utilities
+python-dotenv>=1.0.0
