@@ -21,7 +21,9 @@
       "Bash(docker volume prune:*)",
       "Bash(powershell -Command:*)",
       "Bash(docker ps:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(git restore:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

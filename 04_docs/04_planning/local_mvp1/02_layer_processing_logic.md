@@ -1,109 +1,114 @@
 # OCR Platform Local MVP1 - Layer Processing Logic
 
-> Version: 2.0 | Phase: Local MVP 1
-> Aligned with: SA v3.1
+> Version: 3.0 | Phase: Local MVP 1
+> Aligned with: SA v3.1 + Actual Implementation
 
 ---
 
 ## 1. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           SYSTEM LAYERS OVERVIEW                                 │
-│                                                                                  │
-│  ┌────────────────────────────────────────────────────────────────────────────┐ │
-│  │                              EDGE LAYER                                     │ │
-│  │            "Cổng vào + Kho chứa" - Không xử lý logic nghiệp vụ             │ │
-│  │                                                                             │ │
-│  │   ┌──────────────┐         ┌──────────────────────────────────────────┐   │ │
-│  │   │   Frontend   │◄─HTTP──▶│            API Server                    │   │ │
-│  │   │   (React)    │         │           (FastAPI)                      │   │ │
-│  │   └──────────────┘         └──────────────┬───────────────────────────┘   │ │
-│  │                                           │                                │ │
-│  │   ┌───────────────────────────────────────┼────────────────────────────┐  │ │
-│  │   │              OBJECT STORAGE (MinIO)   │                             │  │ │
-│  │   │   Buckets: uploads | results | deleted│ ◄── API Server has creds   │  │ │
-│  │   │                                       │                             │  │ │
-│  │   └───────────────────────────────────────┼────────────────────────────┘  │ │
-│  │                                           │                                │ │
-│  └───────────────────────────────────────────┼────────────────────────────────┘ │
-│                                              │ internal calls                   │
-│                                              │ + storage credentials            │
-│  ┌───────────────────────────────────────────┼────────────────────────────────┐ │
-│  │                    ORCHESTRATION LAYER    │                                 │ │
-│  │               "Bộ não điều phối"          ▼                                 │ │
-│  │                                                                             │ │
-│  │   ┌─────────┐  ┌─────────┐  ┌─────────────┐  ┌─────────────────────────┐  │ │
-│  │   │  Auth   │  │ Upload  │  │     Job     │  │      File Proxy         │  │ │
-│  │   │ Module  │  │ Module  │  │   Module    │  │       Module            │  │ │
-│  │   │         │  │         │  │             │  │                         │  │ │
-│  │   │Register │  │Validate │  │Create req   │  │Auth service (access_key)│  │ │
-│  │   │Login    │  │Store    │  │Create jobs  │  │ACL check                │  │ │
-│  │   │Session  │  │(→Edge)  │  │Retry logic  │  │Stream files (→Edge)     │  │ │
-│  │   │         │  │         │  │Heartbeat mon│  │                         │  │ │
-│  │   └────┬────┘  └────┬────┘  └──────┬──────┘  └───────────┬─────────────┘  │ │
-│  │        │            │              │                     │                 │ │
-│  │   ┌────┴────────────┴──────────────┴─────────────────────┴──────────────┐ │ │
-│  │   │                   ORCHESTRATION INFRASTRUCTURE                       │ │ │
-│  │   │                                                                      │ │ │
-│  │   │   ┌──────────────────────┐       ┌───────────────────────────────┐  │ │ │
-│  │   │   │       SQLite         │       │      NATS JETSTREAM           │  │ │ │
-│  │   │   │      DATABASE        │       │                               │  │ │ │
-│  │   │   │                      │       │  Stream: OCR_JOBS             │  │ │ │
-│  │   │   │ users, sessions      │       │  Subjects: ocr.{method}.tier{n}│ │ │ │
-│  │   │   │ requests, jobs       │       │                               │  │ │ │
-│  │   │   │ files, services      │       │  Stream: OCR_DLQ              │  │ │ │
-│  │   │   │ heartbeats           │       │  Subjects: dlq.ocr.>          │  │ │ │
-│  │   │   │                      │       │                               │  │ │ │
-│  │   │   └──────────────────────┘       └───────────────┬───────────────┘  │ │ │
-│  │   │                                                  │                   │ │ │
-│  │   └──────────────────────────────────────────────────┼───────────────────┘ │ │
-│  │                                                      │                     │ │
-│  └──────────────────────────────────────────────────────┼─────────────────────┘ │
-│                                                         │ pull (specific subject)│
-│                                                         ▼                       │
-│  ┌───────────────────────────────────────────────────────────────────────────┐  │
-│  │                          PROCESSING LAYER                                  │  │
-│  │                  "Nhà máy xử lý" - Không có business logic                │  │
-│  │                                                                            │  │
-│  │   ┌────────────────────────────────────────────────────────────────────┐  │  │
-│  │   │                        OCR WORKER                                   │  │  │
-│  │   │        (has access_key, NO storage credentials)                    │  │  │
-│  │   │                                                                     │  │  │
-│  │   │   ┌────────┐  ┌──────────┐  ┌───────────┐  ┌─────────────────┐    │  │  │
-│  │   │   │  POLL  │─▶│ DOWNLOAD │─▶│  PROCESS  │─▶│ UPLOAD + REPORT │    │  │  │
-│  │   │   │ QUEUE  │  │via FILE  │  │(Tesseract)│  │  via FILE PROXY │    │  │  │
-│  │   │   │ (NATS) │  │  PROXY   │  │           │  │                 │    │  │  │
-│  │   │   └────────┘  └──────────┘  └─────┬─────┘  └─────────────────┘    │  │  │
-│  │   │                                   │                                │  │  │
-│  │   │                              Error?                                │  │  │
-│  │   │                              ┌────┴────┐                           │  │  │
-│  │   │                         Retriable   Non-retriable                  │  │  │
-│  │   │                              │           │                         │  │  │
-│  │   │                              ▼           ▼                         │  │  │
-│  │   │                    ┌─────────────────────────────────────┐        │  │  │
-│  │   │                    │  Report error to ORCHESTRATOR       │        │  │  │
-│  │   │                    │  (Worker does NOT retry itself)     │        │  │  │
-│  │   │                    └─────────────────────────────────────┘        │  │  │
-│  │   │                                                                    │  │  │
-│  │   │   HEARTBEAT ──▶ POST /internal/heartbeat every 30s                │  │  │
-│  │   │   CLEANUP   ──▶ delete ALL local files after processing           │  │  │
-│  │   │                                                                    │  │  │
-│  │   └────────────────────────────────────────────────────────────────────┘  │  │
-│  │                                                                            │  │
-│  └────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                   │
-│  LAYER COMMUNICATION RULES:                                                       │
-│  ✓ Client ↔ Edge (HTTP)                                                          │
-│  ✓ Edge ↔ Orchestration (internal calls, storage creds)                          │
-│  ✓ Orchestration ↔ Processing (Queue, File Proxy API, Heartbeat API)             │
-│  ✗ Processing → Edge (FORBIDDEN - vượt cấp)                                      │
-│                                                                                   │
-│  FILE ACCESS FLOW:                                                                │
-│  Worker → File Proxy (Orch) → MinIO (Edge)                                       │
-│  Each step is between adjacent layers ✓                                          │
-│                                                                                   │
-└───────────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│                           SYSTEM LAYERS OVERVIEW                                   │
+│                                                                                    │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              EDGE LAYER                                       │ │
+│  │            "Cổng vào + Kho chứa" - Không xử lý logic nghiệp vụ               │ │
+│  │                                                                               │ │
+│  │   ┌──────────────┐         ┌──────────────────────────────────────────┐     │ │
+│  │   │   Frontend   │<--HTTP-->│            API Server                    │     │ │
+│  │   │   (React)    │         │     (FastAPI - port 8000)                │     │ │
+│  │   │  Sidebar nav │         │     /api/v1/* (all routes)               │     │ │
+│  │   └──────────────┘         └──────────────┬───────────────────────────┘     │ │
+│  │                                           │                                  │ │
+│  │   ┌───────────────────────────────────────┼────────────────────────────┐    │ │
+│  │   │              OBJECT STORAGE (MinIO)   │                             │    │ │
+│  │   │   Buckets: uploads | results | deleted│ <-- API Server has creds   │    │ │
+│  │   └───────────────────────────────────────┼────────────────────────────┘    │ │
+│  │                                           │                                  │ │
+│  └───────────────────────────────────────────┼──────────────────────────────────┘ │
+│                                              │ internal calls                     │
+│                                              │ + storage credentials              │
+│  ┌───────────────────────────────────────────┼──────────────────────────────────┐ │
+│  │                    ORCHESTRATION LAYER    │                                   │ │
+│  │               "Bộ não điều phối"          v                                   │ │
+│  │                                                                               │ │
+│  │   ┌─────────┐  ┌─────────┐  ┌─────────────┐  ┌─────────────────────────┐    │ │
+│  │   │  Auth   │  │ Upload  │  │     Job     │  │      File Proxy         │    │ │
+│  │   │ Module  │  │ Module  │  │   Module    │  │       Module            │    │ │
+│  │   │         │  │         │  │             │  │                         │    │ │
+│  │   │Register │  │Validate │  │Create req   │  │Auth service (access_key)│    │ │
+│  │   │Login    │  │Store    │  │Create jobs  │  │ACL check (ServiceType)  │    │ │
+│  │   │Session  │  │(->Edge) │  │Retry logic  │  │Stream files (->Edge)    │    │ │
+│  │   │is_admin │  │         │  │Heartbeat mon│  │                         │    │ │
+│  │   └────┬────┘  └────┬────┘  └──────┬──────┘  └───────────┬─────────────┘    │ │
+│  │        │            │              │                     │                   │ │
+│  │   ┌────┴────────────┴──────────────┴─────────────────────┴──────────────┐   │ │
+│  │   │                   ORCHESTRATION INFRASTRUCTURE                       │   │ │
+│  │   │                                                                      │   │ │
+│  │   │   ┌──────────────────────┐       ┌───────────────────────────────┐  │   │ │
+│  │   │   │       SQLite         │       │      NATS JETSTREAM           │  │   │ │
+│  │   │   │      DATABASE        │       │                               │  │   │ │
+│  │   │   │                      │       │  Stream: OCR_JOBS             │  │   │ │
+│  │   │   │ users, sessions      │       │  Subjects: ocr.{method}.tier{n}│ │   │ │
+│  │   │   │ requests, jobs       │       │                               │  │   │ │
+│  │   │   │ files                │       │  Stream: OCR_DLQ              │  │   │ │
+│  │   │   │ service_types        │       │  Subjects: dlq.{method}.tier{n}│ │   │ │
+│  │   │   │ service_instances    │       │                               │  │   │ │
+│  │   │   │ heartbeats           │       │                               │  │   │ │
+│  │   │   └──────────────────────┘       └───────────────┬───────────────┘  │   │ │
+│  │   └──────────────────────────────────────────────────┼───────────────────┘   │ │
+│  │                                                      │                       │ │
+│  └──────────────────────────────────────────────────────┼───────────────────────┘ │
+│                                                         │ pull (specific subject)  │
+│                                                         v                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│  │                          PROCESSING LAYER                                    │  │
+│  │              "Nhà máy xử lý" - Multi-engine, NO business logic              │  │
+│  │                                                                              │  │
+│  │   ┌───────────────────────────────────────────────────────────────────────┐  │  │
+│  │   │                     OCR WORKERS (Multiple Engines)                     │  │  │
+│  │   │        (has access_key, NO storage credentials)                       │  │  │
+│  │   │                                                                       │  │  │
+│  │   │   ┌──────────────────────┐    ┌──────────────────────┐               │  │  │
+│  │   │   │  PaddleOCR Worker   │    │  Tesseract Worker    │               │  │  │
+│  │   │   │  (GPU - Dockerfile) │    │  (CPU - Dockerfile.cpu)│              │  │  │
+│  │   │   │  deploy/paddle-text/ │    │  deploy/tesseract-cpu/│              │  │  │
+│  │   │   └──────────────────────┘    └──────────────────────┘               │  │  │
+│  │   │                                                                       │  │  │
+│  │   │   Shared Flow:                                                        │  │  │
+│  │   │   ┌────────┐  ┌──────────┐  ┌───────────┐  ┌─────────────────┐      │  │  │
+│  │   │   │REGISTER│->│  POLL    │->│ DOWNLOAD  │->│  PROCESS        │      │  │  │
+│  │   │   │on start│  │  QUEUE   │  │via FILE   │  │(engine-specific)│      │  │  │
+│  │   │   │        │  │ (NATS)   │  │  PROXY    │  │                 │      │  │  │
+│  │   │   └────────┘  └──────────┘  └───────────┘  └────────┬────────┘      │  │  │
+│  │   │                                                      │               │  │  │
+│  │   │                                                ┌─────┴──────┐        │  │  │
+│  │   │                                             Success      Error       │  │  │
+│  │   │                                                │           │         │  │  │
+│  │   │                                                v           v         │  │  │
+│  │   │                                          ┌──────────┐ ┌──────────┐  │  │  │
+│  │   │                                          │UPLOAD via│ │Report to │  │  │  │
+│  │   │                                          │FILE PROXY│ │ORCHESTR. │  │  │  │
+│  │   │                                          └──────────┘ └──────────┘  │  │  │
+│  │   │                                                                       │  │  │
+│  │   │   HEARTBEAT --> POST /api/v1/internal/heartbeat every 30s            │  │  │
+│  │   │   CLEANUP   --> delete ALL local files after processing              │  │  │
+│  │   └───────────────────────────────────────────────────────────────────────┘  │  │
+│  │                                                                              │  │
+│  └──────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+│  LAYER COMMUNICATION RULES:                                                         │
+│  + Client <-> Edge (HTTP)                                                           │
+│  + Edge <-> Orchestration (internal calls, storage creds)                           │
+│  + Orchestration <-> Processing (Queue, File Proxy API, Heartbeat API)              │
+│  x Processing -> Edge (FORBIDDEN - must go through Orchestration)                   │
+│                                                                                     │
+│  FILE ACCESS FLOW:                                                                  │
+│  Worker -> File Proxy (Orch) -> MinIO (Edge)                                        │
+│  Each step is between adjacent layers                                               │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -121,68 +126,52 @@
 │   │    START    │                                                           │
 │   └──────┬──────┘                                                           │
 │          │                                                                   │
-│          ▼                                                                   │
+│          v                                                                   │
 │   ┌─────────────┐     No      ┌─────────────┐                              │
-│   │Has Session? │────────────▶│  Login/     │                              │
+│   │Has Session? │────────────>│  Login/     │                              │
 │   └──────┬──────┘             │  Register   │                              │
 │          │ Yes                 └──────┬──────┘                              │
 │          │                            │ Success                             │
-│          │◄───────────────────────────┘                                     │
-│          ▼                                                                   │
-│   ┌─────────────┐                                                           │
-│   │  Dashboard  │◄─────────────────────────────────────┐                   │
-│   └──────┬──────┘                                      │                   │
-│          │                                              │                   │
-│          ▼                                              │                   │
-│   ┌─────────────────────────────────────┐              │                   │
-│   │          Upload Page                 │              │                   │
-│   │  ┌─────────────────────────────────┐│              │                   │
-│   │  │ Select Files (drag-drop)        ││              │                   │
-│   │  ├─────────────────────────────────┤│              │                   │
-│   │  │ Config:                         ││              │                   │
-│   │  │ • Output Format: [txt|json]     ││              │                   │
-│   │  │ • Retention: [1h|6h|24h|7d]     ││              │                   │
-│   │  └─────────────────────────────────┘│              │                   │
-│   └──────────────┬──────────────────────┘              │                   │
-│                  │ Submit                               │                   │
-│                  ▼                                      │                   │
-│   ┌─────────────────────────────────────┐              │                   │
-│   │ Validate Files (client-side)        │              │                   │
-│   │ • Type: PNG, JPEG, PDF              │              │                   │
-│   │ • Size: ≤ 10MB each, ≤ 50MB total   │              │                   │
-│   │ • Count: ≤ 20 files                 │              │                   │
-│   └──────────────┬──────────────────────┘              │                   │
-│                  │                                      │                   │
-│                  ▼                                      │                   │
-│   ┌─────────────────────────────────────┐              │                   │
-│   │ POST /upload                         │              │                   │
-│   │ (files + output_format + retention)  │              │                   │
-│   └──────────────┬──────────────────────┘              │                   │
-│                  │                                      │                   │
-│                  ▼                                      │                   │
-│   ┌─────────────────────────────────────┐              │                   │
-│   │      Request Detail Page            │              │                   │
-│   │                                     │              │                   │
-│   │  Poll GET /requests/{id}            │              │                   │
-│   │  every 2 seconds                    │◄─────────────┼──── Continue      │
-│   │                                     │              │     Polling       │
-│   │  Show:                              │              │                   │
-│   │  • Progress: 3/5 completed          │              │                   │
-│   │  • Job statuses (incl. REJECTED,    │              │                   │
-│   │    DEAD_LETTER, CANCELLED)          │              │                   │
-│   │  • Cancel button (if QUEUED)        │              │                   │
-│   └──────────────┬──────────────────────┘              │                   │
-│                  │                                      │                   │
-│         ┌────────┼────────┬────────────┐               │                   │
-│         │        │        │            │               │                   │
-│     COMPLETED  PARTIAL  FAILED     Still processing    │                   │
-│         │     SUCCESS     │            │               │                   │
-│         ▼        ▼        ▼            └───────────────┘                   │
-│   ┌──────────────────────────────────┐                                     │
-│   │  Download Results / View Errors   │                                     │
-│   └──────────────────────────────────┘                                     │
-│                  │                                                          │
-│                  └──────────────────────────────────────────────────────────┘
+│          │<───────────────────────────┘                                     │
+│          v                                                                   │
+│   ┌─────────────────────────────────────────────────┐                      │
+│   │  Sidebar Navigation (MainLayout)                 │                      │
+│   │  ├── Dashboard        (/dashboard)               │                      │
+│   │  ├── Batches          (/batches)                 │                      │
+│   │  ├── Upload           (/upload)                  │                      │
+│   │  ├── Settings         (/settings)                │                      │
+│   │  └── [Admin] Service Management (/admin/services)│                      │
+│   └─────────────────────────┬───────────────────────┘                      │
+│                             │                                               │
+│          ┌──────────────────┼──────────────────────┐                       │
+│          │                  │                      │                       │
+│          v                  v                      v                       │
+│   ┌──────────┐     ┌──────────────┐     ┌──────────────┐                  │
+│   │Dashboard │     │Upload Page   │     │Admin Page    │                  │
+│   │- Recent  │     │- Drag-drop   │     │- Service list│                  │
+│   │  batches │     │- Config      │     │- Approve/    │                  │
+│   │- Stats   │     │- Submit      │     │  Reject/     │                  │
+│   └──────────┘     └──────┬───────┘     │  Disable     │                  │
+│                           │              └──────────────┘                  │
+│                           v                                                │
+│                    POST /api/v1/upload                                      │
+│                           │                                                │
+│                           v                                                │
+│                    ┌──────────────────────┐                                │
+│                    │ Batch Detail Page    │                                │
+│                    │ Poll GET /requests/id│                                │
+│                    │ Show job statuses    │                                │
+│                    │ Cancel button        │                                │
+│                    └──────────┬───────────┘                                │
+│                               │                                            │
+│                      Terminal status reached                               │
+│                               │                                            │
+│                               v                                            │
+│                    ┌──────────────────────┐                                │
+│                    │ Result Viewer Page   │                                │
+│                    │ Split-panel view     │                                │
+│                    │ Download/Copy        │                                │
+│                    └─────────────────────┘                                │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -196,7 +185,7 @@
 │                                                                              │
 │   HTTP Request                                                               │
 │        │                                                                     │
-│        ▼                                                                     │
+│        v                                                                     │
 │   ┌─────────────────┐                                                       │
 │   │   Middleware    │                                                       │
 │   │  - Logging      │                                                       │
@@ -204,30 +193,36 @@
 │   │  - Timing       │                                                       │
 │   └────────┬────────┘                                                       │
 │            │                                                                 │
-│            ▼                                                                 │
+│            v                                                                 │
 │   ┌─────────────────┐                                                       │
 │   │   Router        │                                                       │
-│   │  /api/v1/*      │ ──── User endpoints (session auth)                   │
-│   │  /internal/*    │ ──── Worker endpoints (access_key auth)              │
+│   │  /api/v1/*      │ ---- User endpoints (session auth)                   │
+│   │  /api/v1/admin/*│ ---- Admin endpoints (session auth + is_admin)       │
+│   │  /api/v1/internal/*│ - Worker endpoints (access_key auth)              │
 │   └────────┬────────┘                                                       │
 │            │                                                                 │
-│            ▼                                                                 │
+│            v                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                        AUTHENTICATION                                │   │
 │   │                                                                      │   │
 │   │   User Endpoints (/api/v1/*)                                        │   │
-│   │   ├── Extract token from Cookie/Authorization header                │   │
-│   │   ├── Validate session in database                                  │   │
+│   │   ├── Extract token from Authorization header (Bearer)              │   │
+│   │   ├── Validate session.token in database                            │   │
 │   │   └── Return 401 if invalid/expired                                 │   │
 │   │                                                                      │   │
-│   │   Internal Endpoints (/internal/*)                                  │   │
+│   │   Admin Endpoints (/api/v1/admin/*)                                 │   │
+│   │   ├── Same as user auth above                                       │   │
+│   │   ├── Check user.is_admin = true                                    │   │
+│   │   └── Return 403 if not admin                                       │   │
+│   │                                                                      │   │
+│   │   Internal Endpoints (/api/v1/internal/*)                           │   │
 │   │   ├── Extract access_key from X-Access-Key header                   │   │
-│   │   ├── Validate in services table                                    │   │
-│   │   └── Return 401 if invalid/disabled                                │   │
+│   │   ├── Validate in service_types table (status = APPROVED)           │   │
+│   │   └── Return 401 if invalid/not approved                            │   │
 │   │                                                                      │   │
 │   └────────────────────────────────────────────────────────────────────┘   │
 │            │                                                                 │
-│            ▼                                                                 │
+│            v                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                       ENDPOINT HANDLER                               │   │
 │   │                                                                      │   │
@@ -253,24 +248,24 @@
 │                                                                              │
 │  REGISTER: email, password                                                  │
 │       │                                                                      │
-│       ├── Check email unique → Error if exists                             │
-│       ├── Hash password (bcrypt, cost=10)                                   │
-│       ├── INSERT INTO users                                                 │
-│       ├── Create session token                                              │
-│       └── Return { user, token }                                            │
+│       ├── Check email unique -> Error if exists                             │
+│       ├── Hash password (bcrypt)                                            │
+│       ├── INSERT INTO users (is_admin = false)                              │
+│       ├── Create session (generate token, separate from session.id)         │
+│       └── Return { user, token, expires_at }                                │
 │                                                                              │
 │  LOGIN: email, password                                                     │
 │       │                                                                      │
-│       ├── Find user by email → Error if not found                          │
-│       ├── Verify password (bcrypt) → Error if mismatch                     │
-│       ├── Create new session token                                          │
-│       └── Return { user, token }                                            │
+│       ├── Find user by email -> Error if not found                          │
+│       ├── Verify password (bcrypt) -> Error if mismatch                     │
+│       ├── Create new session (token = 64 random chars)                      │
+│       └── Return { user, token, expires_at }                                │
 │                                                                              │
 │  VALIDATE SESSION (Dependency):                                             │
 │       │                                                                      │
-│       ├── Find session by token → 401 if not found                         │
-│       ├── Check expiry → 401 if expired                                    │
-│       └── Return User object                                                │
+│       ├── Find session by token (NOT by id) -> 401 if not found             │
+│       ├── Check session.is_expired -> 401 if expired                        │
+│       └── Return User object (includes is_admin flag)                       │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -283,50 +278,52 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   Input: files[], user_id, method="text_raw", tier=0,                       │
-│          output_format="txt", retention_hours=24                            │
+│          output_format="txt", retention_hours=168                           │
 │         │                                                                    │
-│         ▼                                                                    │
+│         v                                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                    BATCH VALIDATION                                  │   │
 │   │                                                                      │   │
-│   │   Check: count ≤ 20, total size ≤ 50MB                              │   │
-│   │   Fail → 400 Error                                                   │   │
+│   │   Check: count <= 20, total size <= 50MB                             │   │
+│   │   Fail -> 400 Error                                                  │   │
 │   │                                                                      │   │
 │   └────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                 PER-FILE VALIDATION LOOP                             │   │
+│   │               ALL-FILES VALIDATION (validate ALL before storing)     │   │
 │   │                                                                      │   │
 │   │   for each file:                                                     │   │
-│   │       • Check MIME type + magic bytes (PNG, JPEG, PDF)              │   │
-│   │       • Check size ≤ 10MB                                            │   │
-│   │       • If invalid → add to skipped_files[], continue               │   │
-│   │       • If valid → add to valid_files[]                              │   │
+│   │       - Check MIME type + magic bytes (PNG, JPEG, PDF)              │   │
+│   │       - Check size <= 10MB                                           │   │
+│   │       - If invalid -> add to skipped_files[], continue              │   │
+│   │       - If valid -> add to valid_files[]                             │   │
+│   │                                                                      │   │
+│   │   NOTE: All files validated FIRST, then records created.            │   │
 │   │                                                                      │   │
 │   └────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │              CREATE REQUEST + STORE FILES + CREATE JOBS              │   │
+│   │         CREATE REQUEST + STORE FILES + CREATE JOBS + PUBLISH        │   │
 │   │                                                                      │   │
 │   │   1. INSERT INTO requests:                                          │   │
 │   │      (user_id, method, tier, output_format, retention_hours,        │   │
-│   │       status=PROCESSING, total_files, completed_files=0, failed=0)  │   │
+│   │       status=PROCESSING, total_files, expires_at calculated)        │   │
 │   │                                                                      │   │
 │   │   2. For each valid_file:                                           │   │
-│   │      a. Upload to MinIO (Edge layer):                               │   │
-│   │         bucket=uploads, key={user_id}/{request_id}/{file_id}.{ext}  │   │
-│   │      b. INSERT INTO files (request_id, original_name, object_key)   │   │
-│   │      c. INSERT INTO jobs:                                           │   │
+│   │      a. Generate object_key (via storage utils)                     │   │
+│   │      b. Upload to MinIO (Edge): bucket=uploads                     │   │
+│   │      c. INSERT INTO files (request_id, original_name, object_key)   │   │
+│   │      d. INSERT INTO jobs:                                           │   │
 │   │         (request_id, file_id, status=SUBMITTED, method, tier,       │   │
-│   │          output_format, retry_count=0, max_retries=3)               │   │
-│   │                                                                      │   │
-│   │   3. Trigger VALIDATING → QUEUED for each job (see Job Module)      │   │
+│   │          retry_count=0, max_retries=3)                              │   │
+│   │      e. Publish to NATS: ocr.{method}.tier{tier}                   │   │
+│   │         JobMessage includes object_key field                        │   │
 │   │                                                                      │   │
 │   └────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   Output: { request_id, total_files, valid_files, skipped_files[] }         │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -340,41 +337,18 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
-│  │ JOB CREATION & VALIDATION (called after upload)                         ││
-│  │                                                                          ││
-│  │   For each job (status = SUBMITTED):                                    ││
-│  │       │                                                                 ││
-│  │       ▼                                                                 ││
-│  │   Update status → VALIDATING                                            ││
-│  │       │                                                                 ││
-│  │       ├── Validate file format/integrity                                ││
-│  │       │                                                                 ││
-│  │       ├─── Valid ──────────────────────────────────────┐                ││
-│  │       │                                                │                ││
-│  │       │    Update status → QUEUED                      │                ││
-│  │       │    Publish to NATS: ocr.{method}.tier{tier}    │                ││
-│  │       │                                                │                ││
-│  │       └─── Invalid ───────────────────────────┐        │                ││
-│  │                                               │        │                ││
-│  │            Update status → REJECTED            │        │                ││
-│  │            Log rejection reason               │        │                ││
-│  │            Increment request.failed_files     │        │                ││
-│  │                                               │        │                ││
-│  └───────────────────────────────────────────────┴────────┴────────────────┘│
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │ GET REQUEST STATUS                                                      ││
 │  │                                                                          ││
-│  │   1. Find request by ID, check owner                                    ││
+│  │   1. Find request by ID, check owner (user_id match)                   ││
 │  │   2. Load all jobs for request                                          ││
 │  │   3. Aggregate status:                                                   ││
 │  │                                                                          ││
 │  │      ┌─────────────────────────────────────────────────────────────┐    ││
-│  │      │ any(QUEUED, PROCESSING, RETRYING) → PROCESSING             │    ││
-│  │      │ all(COMPLETED)                     → COMPLETED              │    ││
-│  │      │ all(FAILED, DEAD_LETTER, REJECTED) → FAILED                 │    ││
-│  │      │ mix(COMPLETED + FAILED/DL/REJECTED)→ PARTIAL_SUCCESS        │    ││
-│  │      │ all(CANCELLED)                     → CANCELLED              │    ││
+│  │      │ any(QUEUED, PROCESSING, RETRYING) -> PROCESSING             │    ││
+│  │      │ all(COMPLETED)                     -> COMPLETED              │    ││
+│  │      │ all(FAILED, DEAD_LETTER, REJECTED) -> FAILED                 │    ││
+│  │      │ mix(COMPLETED + FAILED/DL/REJECTED)-> PARTIAL_SUCCESS        │    ││
+│  │      │ all(CANCELLED)                     -> CANCELLED              │    ││
 │  │      └─────────────────────────────────────────────────────────────┘    ││
 │  │                                                                          ││
 │  │   4. Return { request, jobs[], status, progress }                       ││
@@ -385,8 +359,7 @@
 │  │ CANCEL REQUEST (only if jobs are QUEUED)                                ││
 │  │                                                                          ││
 │  │   For each job where status = QUEUED:                                   ││
-│  │       Update status → CANCELLED                                         ││
-│  │       Remove from queue (if possible)                                   ││
+│  │       Update status -> CANCELLED                                        ││
 │  │                                                                          ││
 │  │   Jobs already PROCESSING cannot be cancelled                           ││
 │  │                                                                          ││
@@ -395,7 +368,7 @@
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.4 Retry Orchestrator Flow (NEW - Retry at Orchestration Layer)
+### 3.4 Retry Orchestrator Flow (Retry at Orchestration Layer)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -403,10 +376,10 @@
 │                   (Retry logic in Orchestration, NOT Worker)                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│   Worker reports error via POST /internal/jobs/{id}/status                  │
+│   Worker reports error via PATCH /api/v1/internal/jobs/{id}/status          │
 │   Body: { status: "error", error: "...", retriable: true/false }            │
 │         │                                                                    │
-│         ▼                                                                    │
+│         v                                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                    ORCHESTRATOR RECEIVES ERROR                       │   │
 │   │                                                                      │   │
@@ -419,26 +392,26 @@
 │         ┌──────┴──────┐                                                      │
 │      retriable     non-retriable                                             │
 │         │               │                                                    │
-│         ▼               ▼                                                    │
+│         v               v                                                    │
 │   ┌───────────────┐ ┌───────────────────────────────────────────────────┐   │
-│   │Check retry_cnt│ │ Update status → FAILED                            │   │
+│   │Check retry_cnt│ │ Update status -> FAILED                            │   │
 │   │< max_retries? │ │ Increment request.failed_files                    │   │
-│   └───────┬───────┘ │ Check if request complete → update request.status │   │
+│   └───────┬───────┘ │ Check if request complete -> update request.status │   │
 │           │         └───────────────────────────────────────────────────┘   │
 │     ┌─────┴─────┐                                                            │
 │   Yes          No                                                            │
 │     │           │                                                            │
-│     ▼           ▼                                                            │
+│     v           v                                                            │
 │   ┌───────────────────────────────────────────────────────────────────────┐ │
 │   │ RETRY PATH                        │ DEAD LETTER PATH                  │ │
 │   │                                   │                                   │ │
-│   │ 1. Update status → RETRYING       │ 1. Update status → DEAD_LETTER    │ │
+│   │ 1. Update status -> RETRYING      │ 1. Update status -> DEAD_LETTER   │ │
 │   │ 2. Increment retry_count          │ 2. Move to DLQ:                   │ │
-│   │ 3. Calculate delay:               │    Publish to dlq.ocr.{method}... │ │
-│   │    delay = 1s × 2^retry_count     │ 3. Increment request.failed_files │ │
+│   │ 3. Calculate delay:               │    Publish to dlq.{method}.tier{n}│ │
+│   │    delay = 1s x 2^retry_count     │ 3. Increment request.failed_files │ │
 │   │    (1s, 2s, 4s)                   │ 4. Update request status          │ │
 │   │ 4. Wait delay (scheduled task)    │                                   │ │
-│   │ 5. Update status → QUEUED         │                                   │ │
+│   │ 5. Update status -> QUEUED        │                                   │ │
 │   │ 6. Re-publish to queue:           │                                   │ │
 │   │    ocr.{method}.tier{tier}        │                                   │ │
 │   │                                   │                                   │ │
@@ -450,7 +423,7 @@
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5 Heartbeat Monitor Flow (NEW)
+### 3.5 Heartbeat Monitor Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -459,11 +432,11 @@
 │                                                                              │
 │   Worker sends heartbeat every 30 seconds:                                  │
 │                                                                              │
-│   POST /internal/heartbeat                                                   │
+│   POST /api/v1/internal/heartbeat                                           │
 │   {                                                                          │
-│     "service_id": "worker-ocr-text-tier0",                                  │
+│     "instance_id": "ocr-paddle-abc123",                                     │
 │     "access_key": "sk_xxx",                                                 │
-│     "status": "processing",        // idle | processing | uploading | error│
+│     "status": "processing",        // idle | processing | error             │
 │     "current_job_id": "job_abc",   // null if idle                         │
 │     "progress": {                                                           │
 │       "files_completed": 2,                                                 │
@@ -472,13 +445,14 @@
 │     "error_count": 0                                                        │
 │   }                                                                          │
 │         │                                                                    │
-│         ▼                                                                    │
+│         v                                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                   ORCHESTRATOR HEARTBEAT HANDLER                     │   │
 │   │                                                                      │   │
-│   │   1. Validate access_key                                            │   │
-│   │   2. INSERT INTO heartbeats (all fields + received_at = now())      │   │
-│   │   3. Return 200 OK                                                  │   │
+│   │   1. Validate access_key (ServiceType.status = APPROVED)            │   │
+│   │   2. Update service_instances.last_heartbeat_at                     │   │
+│   │   3. INSERT INTO heartbeats (all fields + received_at = now())      │   │
+│   │   4. Return 200 OK                                                  │   │
 │   │                                                                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
@@ -486,20 +460,20 @@
 │   │               HEARTBEAT MONITOR (Background Task)                    │   │
 │   │                        Runs every 30 seconds                         │   │
 │   │                                                                      │   │
-│   │   For each registered service:                                      │   │
+│   │   For each registered service instance:                             │   │
 │   │       │                                                              │   │
-│   │       ├── Get latest heartbeat                                      │   │
+│   │       ├── Get latest heartbeat from instance                        │   │
 │   │       │                                                              │   │
 │   │       ├── No heartbeat for > HEARTBEAT_TIMEOUT (90s)?              │   │
-│   │       │   └── Mark worker as DEAD                                   │   │
-│   │       │       If worker had current_job_id:                        │   │
-│   │       │           → Return job to QUEUED (for another worker)      │   │
+│   │       │   └── Mark instance as DEAD                                 │   │
+│   │       │       If instance had current_job_id:                      │   │
+│   │       │           -> Return job to QUEUED (for another worker)     │   │
 │   │       │                                                              │   │
 │   │       ├── status = "error" continuously?                           │   │
-│   │       │   └── Mark worker as UNHEALTHY                             │   │
+│   │       │   └── Mark instance as UNHEALTHY                           │   │
 │   │       │                                                              │   │
 │   │       └── progress unchanged for > JOB_TIMEOUT?                    │   │
-│   │           └── Mark worker as STALLED                               │   │
+│   │           └── Mark instance as STALLED                             │   │
 │   │               Return job to QUEUED                                  │   │
 │   │                                                                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
@@ -515,65 +489,139 @@
 │                                                                              │
 │   File Proxy is in ORCHESTRATION layer.                                     │
 │   It calls EDGE layer (MinIO) using storage credentials.                    │
-│   This is valid: Orchestration → Edge (adjacent layers)                     │
+│   ACL validated against ServiceType (APPROVED status + allowed methods/tiers)│
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │ DOWNLOAD FILE (Worker requests file)                                    ││
 │  │                                                                          ││
-│  │   POST /internal/file-proxy/download                                    ││
+│  │   POST /api/v1/internal/file-proxy/download                             ││
 │  │   Headers: X-Access-Key: {worker_access_key}                            ││
 │  │   Body: { "job_id": "job_abc" }                                         ││
 │  │         │                                                               ││
-│  │         ▼                                                               ││
-│  │   1. Validate access_key → 401 if invalid                               ││
-│  │   2. Find service by access_key                                         ││
+│  │         v                                                               ││
+│  │   1. Validate access_key -> 401 if invalid                               ││
+│  │   2. Find ServiceType by access_key (must be APPROVED)                  ││
 │  │   3. Find job by job_id                                                 ││
 │  │   4. Check ACL: service can access this job's file?                     ││
-│  │      (job.method in service.allowed_methods &&                          ││
-│  │       job.tier in service.allowed_tiers)                                ││
-│  │      → 403 if denied                                                    ││
+│  │      (job.method in service_type.allowed_methods &&                     ││
+│  │       job.tier in service_type.allowed_tiers)                           ││
+│  │      -> 403 if denied                                                    ││
 │  │   5. Get file.object_key from database                                  ││
-│  │   6. Call MinIO (Edge layer): GetObject(bucket=uploads, key)            ││
+│  │   6. Call MinIO (Edge): GetObject(bucket=uploads, key)                  ││
 │  │   7. Stream file to Worker                                              ││
-│  │   8. Log access for audit trail                                         ││
 │  │                                                                          ││
 │  └─────────────────────────────────────────────────────────────────────────┘│
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │ UPLOAD RESULT (Worker uploads OCR result)                               ││
 │  │                                                                          ││
-│  │   POST /internal/file-proxy/upload                                      ││
+│  │   POST /api/v1/internal/file-proxy/upload                               ││
 │  │   Headers: X-Access-Key: {worker_access_key}                            ││
 │  │   Body: multipart/form-data { job_id, file, processing_time_ms }        ││
 │  │         │                                                               ││
-│  │         ▼                                                               ││
-│  │   1. Validate access_key → 401 if invalid                               ││
+│  │         v                                                               ││
+│  │   1. Validate access_key -> 401 if invalid                               ││
 │  │   2. Check ACL for job                                                  ││
 │  │   3. Generate result key: results/{request_id}/{job_id}.{format}        ││
-│  │   4. Call MinIO (Edge layer): PutObject(bucket=results, key, file)      ││
+│  │   4. Call MinIO (Edge): PutObject(bucket=results, key, file)            ││
 │  │   5. Return { result_path: key }                                        ││
 │  │                                                                          ││
 │  └─────────────────────────────────────────────────────────────────────────┘│
 │                                                                              │
-│   LAYER FLOW:                                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.7 Worker Registration Flow (NEW)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      WORKER REGISTRATION FLOW                                │
+│             (Workers self-register on startup)                               │
+├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│   Processing Layer          Orchestration Layer           Edge Layer        │
-│     Worker                    File Proxy                   MinIO            │
-│       │                          │                          │               │
-│       │  POST /download          │                          │               │
-│       │  {job_id, access_key}    │                          │               │
-│       │─────────────────────────►│                          │               │
-│       │                          │  validate + ACL          │               │
-│       │                          │                          │               │
-│       │                          │  S3 GetObject            │               │
-│       │                          │─────────────────────────►│               │
-│       │                          │◄─────────────────────────│               │
-│       │   stream file            │                          │               │
-│       │◄─────────────────────────│                          │               │
-│       │                          │                          │               │
+│   Worker starts up:                                                         │
 │                                                                              │
-│   Each arrow crosses exactly ONE layer boundary ✓                           │
+│   POST /api/v1/internal/register                                            │
+│   {                                                                          │
+│     "service_type": "ocr-paddle",                                           │
+│     "instance_id": "ocr-paddle-abc123",                                     │
+│     "display_name": "PaddleOCR Text Raw",                                   │
+│     "description": "GPU-accelerated Vietnamese OCR",                        │
+│     "dev_contact": "dev@example.com",                                       │
+│     "allowed_methods": ["text_raw"],                                        │
+│     "allowed_tiers": [0],                                                   │
+│     "access_key": "sk_local_paddle" (optional, for seeded services)         │
+│   }                                                                          │
+│         │                                                                    │
+│         v                                                                    │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                   ORCHESTRATOR REGISTER HANDLER                      │   │
+│   │                                                                      │   │
+│   │   1. Check if ServiceType exists for this service_type               │   │
+│   │                                                                      │   │
+│   │   ┌──── Type NOT exists ────────────────────────────────────────┐   │   │
+│   │   │ Create new ServiceType (status = PENDING)                    │   │   │
+│   │   │ Create ServiceInstance (status = WAITING)                    │   │   │
+│   │   │ Return { status: "waiting", message: "Pending admin approval"}│   │   │
+│   │   └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                      │   │
+│   │   ┌──── Type exists, status = APPROVED ─────────────────────────┐   │   │
+│   │   │ Create ServiceInstance (status = ACTIVE)                     │   │   │
+│   │   │ Return { status: "active", access_key: "sk_xxx" }           │   │   │
+│   │   │ Worker can now start processing jobs                        │   │   │
+│   │   └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                      │   │
+│   │   ┌──── Type exists, status = PENDING/DISABLED ─────────────────┐   │   │
+│   │   │ Create ServiceInstance (status = WAITING)                    │   │   │
+│   │   │ Return { status: "waiting" }                                 │   │   │
+│   │   └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                      │   │
+│   │   ┌──── Type exists, status = REJECTED ─────────────────────────┐   │   │
+│   │   │ Return 403 { message: "Service type rejected" }             │   │   │
+│   │   └──────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                      │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│   DEREGISTER (graceful shutdown):                                           │
+│   POST /api/v1/internal/deregister                                          │
+│   -> Mark ServiceInstance status = DEAD                                     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.8 Admin Service Management Flow (NEW)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   ADMIN SERVICE MANAGEMENT FLOW                              │
+│           (Admin approves/rejects/disables service types)                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Admin (is_admin = true) accesses /admin/services page                     │
+│                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │ LIST SERVICE TYPES (filtered by status)                              │   │
+│   │                                                                      │   │
+│   │   GET /api/v1/admin/service-types?status=PENDING                    │   │
+│   │   Shows: type_id, display_name, description, instance_count,        │   │
+│   │          dev_contact, registered_at                                  │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│   Admin actions:                                                             │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+│   │ APPROVE  │  │  REJECT  │  │ DISABLE  │  │  ENABLE  │  │  DELETE  │  │
+│   └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
+│        │             │             │             │             │          │
+│        v             v             v             v             v          │
+│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐     │
+│   │PENDING   │ │PENDING   │ │APPROVED  │ │DISABLED  │ │Hard      │     │
+│   │->APPROVED│ │->REJECTED│ │->DISABLED│ │->APPROVED│ │delete    │     │
+│   │Generate  │ │Set reason│ │Instances │ │Instances │ │type +    │     │
+│   │access_key│ │(modal)   │ │-> WAITING│ │-> ACTIVE │ │instances │     │
+│   │Instances │ │Instances │ │          │ │          │ │          │     │
+│   │-> ACTIVE │ │unchanged │ │          │ │          │ │          │     │
+│   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘     │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -593,19 +641,24 @@
 │   │                        WORKER STARTUP                                │   │
 │   │                                                                      │   │
 │   │   1. Load config:                                                   │   │
-│   │      - WORKER_SERVICE_ID                                            │   │
-│   │      - WORKER_ACCESS_KEY                                            │   │
-│   │      - WORKER_FILTER_SUBJECT (e.g., ocr.text_raw.tier0)            │   │
+│   │      - WORKER_SERVICE_TYPE (e.g., "ocr-paddle")                    │   │
+│   │      - Auto-generate instance_id ({type}-{hostname[:12]})          │   │
+│   │      - WORKER_ACCESS_KEY (optional, empty = wait for approval)     │   │
+│   │      - WORKER_FILTER_SUBJECT (e.g., ocr.text_raw.tier0)           │   │
 │   │      - NO MINIO_* variables (enforced)                              │   │
 │   │                                                                      │   │
-│   │   2. Connect to NATS                                                │   │
-│   │   3. Create consumer with specific subject (no wildcard)            │   │
-│   │   4. Initialize Tesseract engine                                    │   │
-│   │   5. Start heartbeat background task                                │   │
+│   │   2. POST /api/v1/internal/register (self-registration)            │   │
+│   │      -> If APPROVED: receive access_key, proceed                   │   │
+│   │      -> If PENDING: wait for admin approval                        │   │
+│   │                                                                      │   │
+│   │   3. Connect to NATS                                                │   │
+│   │   4. Create consumer with specific subject (no wildcard)            │   │
+│   │   5. Initialize OCR engine (PaddleOCR or Tesseract)                │   │
+│   │   6. Start heartbeat background task                                │   │
 │   │                                                                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                        MAIN POLL LOOP                                │   │
 │   │                                                                      │   │
@@ -614,21 +667,21 @@
 │   │       ├── Send heartbeat (if interval elapsed)                      │   │
 │   │       │   { status: "idle", current_job_id: null }                  │   │
 │   │       │                                                              │   │
-│   │       ▼                                                              │   │
+│   │       v                                                              │   │
 │   │   ┌─────────────────┐                                               │   │
-│   │   │ Pull job from   │ ← NATS fetch(batch=1, timeout=1s)             │   │
+│   │   │ Pull job from   │ <- NATS fetch(batch=1, timeout=1s)            │   │
 │   │   │ queue           │                                               │   │
 │   │   └────────┬────────┘                                               │   │
 │   │            │                                                         │   │
 │   │       ┌────┴────┐                                                   │   │
 │   │    No Job      Got Job                                               │   │
 │   │       │           │                                                 │   │
-│   │       ▼           ▼                                                 │   │
-│   │   sleep(1s)   Process Job                                           │   │
+│   │       v           v                                                 │   │
+│   │   sleep(1s)   Process Job (engine-specific)                        │   │
 │   │       │           │                                                 │   │
 │   │       └───────────┤                                                 │   │
 │   │                   │                                                 │   │
-│   │                   ▼                                                 │   │
+│   │                   v                                                 │   │
 │   │            ┌──────────────────────────────────────────────────┐    │   │
 │   │            │ On Success: ACK message                          │    │   │
 │   │            │ On Error:   ACK message + report error to Orch   │    │   │
@@ -646,90 +699,82 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        JOB PROCESSING FLOW                                   │
 │                                                                              │
-│   KEY: Worker does NOT retry. Any error → report to Orchestrator.           │
+│   KEY: Worker does NOT retry. Any error -> report to Orchestrator.          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   Input: JobMessage { job_id, request_id, file_id, method, tier,            │
-│                       output_format, retry_count }                          │
+│                       output_format, object_key, retry_count }              │
 │         │                                                                    │
-│         ▼                                                                    │
+│         v                                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │ STEP 1: NOTIFY ORCHESTRATOR - PROCESSING                            │   │
 │   │                                                                      │   │
-│   │   POST /internal/jobs/{job_id}/status                               │   │
-│   │   { status: "PROCESSING", started_at: now(), worker_id: self.id }   │   │
+│   │   PATCH /api/v1/internal/jobs/{job_id}/status                       │   │
+│   │   { status: "PROCESSING", worker_id: self.instance_id }            │   │
 │   │                                                                      │   │
-│   │   Update heartbeat: { status: "processing", current_job_id: job_id }│   │
-│   │                                                                      │   │
+│   │   Update heartbeat: { status: "processing", current_job_id }        │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │ STEP 2: DOWNLOAD FILE VIA FILE PROXY                                 │   │
 │   │                                                                      │   │
-│   │   POST /internal/file-proxy/download                                │   │
+│   │   POST /api/v1/internal/file-proxy/download                         │   │
 │   │   Headers: X-Access-Key: {access_key}                               │   │
 │   │   Body: { job_id }                                                  │   │
 │   │                                                                      │   │
 │   │   Save to: /tmp/ocr_worker/{job_id}_input.{ext}                     │   │
 │   │                                                                      │   │
-│   │   Error? → Go to ERROR HANDLING                                     │   │
-│   │                                                                      │   │
+│   │   Error? -> Go to ERROR HANDLING                                    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │ STEP 3: OCR PROCESSING                                               │   │
+│   │ STEP 3: OCR PROCESSING (Engine-specific)                             │   │
 │   │                                                                      │   │
 │   │   with timeout(JOB_TIMEOUT_SECONDS):                                │   │
-│   │       result = tesseract.image_to_string(input_file)                │   │
-│   │       # or other format based on output_format                      │   │
+│   │       # Engine dispatched based on service_type                     │   │
+│   │       # PaddleOCR: preprocessing -> paddle inference -> postprocess │   │
+│   │       # Tesseract: preprocessing -> tesseract OCR -> postprocess    │   │
+│   │       result = engine.process(input_file)                           │   │
 │   │                                                                      │   │
 │   │   Save to: /tmp/ocr_worker/{job_id}_result.{format}                 │   │
 │   │                                                                      │   │
-│   │   Error? → Go to ERROR HANDLING                                     │   │
-│   │                                                                      │   │
+│   │   Error? -> Go to ERROR HANDLING                                    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │ STEP 4: UPLOAD RESULT VIA FILE PROXY                                 │   │
 │   │                                                                      │   │
-│   │   Update heartbeat: { status: "uploading" }                         │   │
-│   │                                                                      │   │
-│   │   POST /internal/file-proxy/upload                                  │   │
+│   │   POST /api/v1/internal/file-proxy/upload                           │   │
 │   │   Headers: X-Access-Key: {access_key}                               │   │
 │   │   Body: multipart { job_id, file, processing_time_ms }              │   │
 │   │                                                                      │   │
-│   │   Error? → Go to ERROR HANDLING                                     │   │
-│   │                                                                      │   │
+│   │   Error? -> Go to ERROR HANDLING                                    │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │ STEP 5: NOTIFY ORCHESTRATOR - COMPLETED                              │   │
 │   │                                                                      │   │
-│   │   POST /internal/jobs/{job_id}/status                               │   │
+│   │   PATCH /api/v1/internal/jobs/{job_id}/status                       │   │
 │   │   {                                                                  │   │
 │   │       status: "COMPLETED",                                          │   │
 │   │       result_path: result_key,                                      │   │
-│   │       processing_time_ms: elapsed,                                  │   │
-│   │       completed_at: now()                                           │   │
+│   │       processing_time_ms: elapsed                                   │   │
 │   │   }                                                                  │   │
-│   │                                                                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │ STEP 6: CLEANUP LOCAL FILES (MANDATORY)                              │   │
 │   │                                                                      │   │
 │   │   delete(/tmp/ocr_worker/{job_id}_*)                                │   │
-│   │                                                                      │   │
 │   │   Update heartbeat: { status: "idle", current_job_id: null }        │   │
-│   │                                                                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                │                                                             │
-│                ▼                                                             │
+│                v                                                             │
 │           ACK message to NATS (job complete)                                │
 │                                                                              │
 │ ═══════════════════════════════════════════════════════════════════════════ │
@@ -738,12 +783,12 @@
 │   │                      ERROR HANDLING                                  │   │
 │   │                                                                      │   │
 │   │   1. Classify error:                                                │   │
-│   │      • Retriable: timeout, network error, temp file error           │   │
-│   │      • Non-retriable: invalid file, corrupted, access denied        │   │
+│   │      - Retriable: timeout, network error, temp file error           │   │
+│   │      - Non-retriable: invalid file, corrupted, access denied        │   │
 │   │                                                                      │   │
 │   │   2. Report to Orchestrator (Worker does NOT decide retry):         │   │
 │   │                                                                      │   │
-│   │      POST /internal/jobs/{job_id}/status                            │   │
+│   │      PATCH /api/v1/internal/jobs/{job_id}/status                    │   │
 │   │      {                                                               │   │
 │   │          status: "ERROR",                                           │   │
 │   │          error: "error message",                                    │   │
@@ -751,11 +796,8 @@
 │   │      }                                                               │   │
 │   │                                                                      │   │
 │   │   3. Cleanup local files                                            │   │
-│   │                                                                      │   │
-│   │   4. ACK message to NATS (even on error - Orchestrator handles it)  │   │
-│   │                                                                      │   │
+│   │   4. ACK message to NATS (even on error)                            │   │
 │   │   5. Update heartbeat: { status: "idle" }                           │   │
-│   │                                                                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -773,54 +815,47 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │ Client    Frontend   API Server   MinIO     Modules    NATS     Worker      │
-│ (User)               (Edge)      (Edge)    (Orch)              (Processing) │
+│ (User)               (Edge:8000) (Edge)    (Orch)              (Processing) │
 │   │          │          │          │          │         │          │        │
 │   │ Select   │          │          │          │         │          │        │
 │   │ files +  │          │          │          │         │          │        │
 │   │ config   │          │          │          │         │          │        │
-│   │─────────▶│          │          │          │         │          │        │
+│   │─────────>│          │          │          │         │          │        │
 │   │          │          │          │          │         │          │        │
 │   │          │ POST     │          │          │         │          │        │
 │   │          │ /upload  │          │          │         │          │        │
-│   │          │─────────▶│          │          │         │          │        │
+│   │          │─────────>│          │          │         │          │        │
 │   │          │          │          │          │         │          │        │
 │   │          │          │ validate │          │         │          │        │
-│   │          │          │─────────────────────▶         │          │        │
+│   │          │          │─────────────────────>         │          │        │
 │   │          │          │          │          │         │          │        │
 │   │          │          │          │  PUT     │         │          │        │
 │   │          │          │          │  files   │         │          │        │
-│   │          │          │◀─────────┼──────────│         │          │        │
+│   │          │          │<─────────┼──────────│         │          │        │
 │   │          │          │          │          │         │          │        │
 │   │          │          │          │  create  │         │          │        │
-│   │          │          │          │  request │         │          │        │
-│   │          │          │          │  + jobs  │         │          │        │
+│   │          │          │          │  req+job │         │          │        │
 │   │          │          │          │          │         │          │        │
-│   │          │          │          │ validate │ publish │          │        │
-│   │          │          │          │ → QUEUED │ jobs    │          │        │
-│   │          │          │          │──────────┼────────▶│          │        │
+│   │          │          │          │ publish  │         │          │        │
+│   │          │          │          │ jobs     │         │          │        │
+│   │          │          │          │──────────┼────────>│          │        │
 │   │          │          │          │          │         │          │        │
-│   │          │◀─────────│  request_id         │         │          │        │
-│   │          │          │          │          │         │          │        │
-│   │◀─────────│          │          │          │         │          │        │
+│   │          │<─────────│  request_id         │         │          │        │
+│   │<─────────│          │          │          │         │          │        │
 │   │ redirect │          │          │          │         │          │        │
 │   │ to detail│          │          │          │         │          │        │
 │   │          │          │          │          │         │          │        │
 │   │          │          │          │          │         │ pull     │        │
 │   │          │          │          │          │         │ job      │        │
-│   │          │          │          │          │         │◀─────────│        │
+│   │          │          │          │          │         │<─────────│        │
 │   │          │          │          │          │         │          │        │
-│   │          │          │          │ status:  │         │          │        │
+│   │          │          │          │ PATCH    │         │          │        │
 │   │          │          │          │PROCESSING│         │          │        │
-│   │          │          │          │◀─────────┼─────────┼──────────│        │
+│   │          │          │          │<─────────┼─────────┼──────────│        │
 │   │          │          │          │          │         │          │        │
 │   │          │          │          │download  │         │          │        │
 │   │          │          │          │via proxy │         │          │        │
-│   │          │          │          │◀─────────┼─────────┼──────────│        │
-│   │          │          │          │          │         │          │        │
-│   │          │          │  stream  │          │         │          │        │
-│   │          │          │  file    │          │         │          │        │
-│   │          │          │◀─────────│          │         │          │        │
-│   │          │          │─────────────────────┼─────────┼─────────▶│        │
+│   │          │          │          │<─────────┼─────────┼──────────│        │
 │   │          │          │          │          │         │          │        │
 │   │          │          │          │          │         │ ┌──────┐ │        │
 │   │          │          │          │          │         │ │ OCR  │ │        │
@@ -828,33 +863,70 @@
 │   │          │          │          │          │         │          │        │
 │   │          │          │          │upload    │         │          │        │
 │   │          │          │          │via proxy │         │          │        │
-│   │          │          │          │◀─────────┼─────────┼──────────│        │
-│   │          │          │  PUT     │          │         │          │        │
-│   │          │          │  result  │          │         │          │        │
-│   │          │          │◀─────────│          │         │          │        │
-│   │          │          │─────────▶│          │         │          │        │
+│   │          │          │          │<─────────┼─────────┼──────────│        │
 │   │          │          │          │          │         │          │        │
-│   │          │          │          │ status:  │         │          │        │
+│   │          │          │          │ PATCH    │         │          │        │
 │   │          │          │          │COMPLETED │         │          │        │
-│   │          │          │          │◀─────────┼─────────┼──────────│        │
+│   │          │          │          │<─────────┼─────────┼──────────│        │
 │   │          │          │          │          │         │          │        │
 │   │          │ GET      │          │          │         │          │        │
 │   │          │/requests/│          │          │         │          │        │
 │   │          │ {id}     │          │          │         │          │        │
-│   │          │─────────▶│          │          │         │          │        │
+│   │          │─────────>│          │          │         │          │        │
 │   │          │          │ query    │          │         │          │        │
-│   │          │          │─────────────────────▶         │          │        │
-│   │          │◀─────────│ status   │          │         │          │        │
-│   │          │          │          │          │         │          │        │
-│   │◀─────────│          │          │          │         │          │        │
-│   │ show     │          │          │          │         │          │        │
-│   │ results  │          │          │          │         │          │        │
-│   │          │          │          │          │         │          │        │
+│   │          │          │─────────────────────>         │          │        │
+│   │          │<─────────│ status   │          │         │          │        │
+│   │<─────────│ results  │          │          │         │          │        │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 Retry Flow (Orchestrator Handles Retry)
+### 5.2 Worker Registration Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SEQUENCE: WORKER REGISTRATION                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Worker              Orchestrator              Admin             Database  │
+│     │                      │                     │                    │     │
+│     │ POST /register       │                     │                    │     │
+│     │ {service_type,       │                     │                    │     │
+│     │  instance_id,        │                     │                    │     │
+│     │  display_name, ...}  │                     │                    │     │
+│     │─────────────────────>│                     │                    │     │
+│     │                      │ Create ServiceType  │                    │     │
+│     │                      │ (PENDING)           │                    │     │
+│     │                      │─────────────────────────────────────────>│     │
+│     │                      │ Create ServiceInstance                   │     │
+│     │                      │ (WAITING)           │                    │     │
+│     │                      │─────────────────────────────────────────>│     │
+│     │<─────────────────────│                     │                    │     │
+│     │ { status: "waiting" }│                     │                    │     │
+│     │                      │                     │                    │     │
+│     │  [Worker polls or waits]                   │                    │     │
+│     │                      │                     │                    │     │
+│     │                      │   Admin approves    │                    │     │
+│     │                      │<────────────────────│                    │     │
+│     │                      │ Update type APPROVED│                    │     │
+│     │                      │ Generate access_key │                    │     │
+│     │                      │ Update instances    │                    │     │
+│     │                      │ -> ACTIVE           │                    │     │
+│     │                      │─────────────────────────────────────────>│     │
+│     │                      │                     │                    │     │
+│     │  [Worker detects approval / re-registers]  │                    │     │
+│     │─────────────────────>│                     │                    │     │
+│     │<─────────────────────│                     │                    │     │
+│     │ { status: "active",  │                     │                    │     │
+│     │   access_key: "sk_x"}│                     │                    │     │
+│     │                      │                     │                    │     │
+│     │  [Worker starts processing jobs]           │                    │     │
+│     │                      │                     │                    │     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.3 Retry Flow (Orchestrator Handles Retry)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -865,76 +937,44 @@
 │   Worker            Orchestrator              NATS                Database  │
 │     │                    │                     │                      │     │
 │     │ pull job           │                     │                      │     │
-│     │◀───────────────────┼─────────────────────│                      │     │
+│     │<───────────────────┼─────────────────────│                      │     │
 │     │                    │                     │                      │     │
-│     │ POST status:       │                     │                      │     │
+│     │ PATCH status:      │                     │                      │     │
 │     │ PROCESSING         │                     │                      │     │
-│     │───────────────────▶│                     │                      │     │
-│     │                    │──────────────────────────────────────────▶│     │
+│     │───────────────────>│                     │                      │     │
+│     │                    │────────────────────────────────────────-->│     │
 │     │                    │                     │                      │     │
+│     │   [OCR fails]      │                     │                      │     │
 │     │                    │                     │                      │     │
-│     │   [OCR fails - timeout]                  │                      │     │
-│     │                    │                     │                      │     │
-│     │ POST status:       │                     │                      │     │
+│     │ PATCH status:      │                     │                      │     │
 │     │ ERROR              │                     │                      │     │
-│     │ {error: "timeout", │                     │                      │     │
-│     │  retriable: true}  │                     │                      │     │
-│     │───────────────────▶│                     │                      │     │
+│     │ {error, retriable} │                     │                      │     │
+│     │───────────────────>│                     │                      │     │
 │     │                    │                     │                      │     │
 │     │ ACK message        │                     │                      │     │
-│     │────────────────────┼────────────────────▶│                      │     │
+│     │────────────────────┼────────────────────>│                      │     │
 │     │                    │                     │                      │     │
-│     │   (Worker done - goes back to polling)   │                      │     │
-│     │                    │                     │                      │     │
-│     │                    │ ┌────────────────────────────────────────┐│     │
-│     │                    │ │ Orchestrator Retry Logic:             ││     │
-│     │                    │ │                                        ││     │
-│     │                    │ │ 1. retriable=true, retry_count=0<3   ││     │
-│     │                    │ │ 2. Update status → RETRYING           ││     │
-│     │                    │ │ 3. Increment retry_count → 1          ││     │
-│     │                    │ │ 4. Wait delay: 1s × 2^0 = 1s          ││     │
-│     │                    │ └────────────────────────────────────────┘│     │
-│     │                    │                     │                      │     │
-│     │                    │──────────────────────────────────────────▶│     │
-│     │                    │                     │                      │     │
-│     │                    │   [wait 1 second]   │                      │     │
-│     │                    │                     │                      │     │
-│     │                    │ Update → QUEUED     │                      │     │
-│     │                    │──────────────────────────────────────────▶│     │
-│     │                    │                     │                      │     │
+│     │                    │ retry_count=0<3     │                      │     │
+│     │                    │ -> RETRYING         │                      │     │
+│     │                    │ wait 1s             │                      │     │
+│     │                    │ -> QUEUED           │                      │     │
+│     │                    │────────────────────────────────────────-->│     │
 │     │                    │ Re-publish job      │                      │     │
-│     │                    │────────────────────▶│                      │     │
-│     │                    │                     │                      │     │
-│     │ pull job (retry 1) │                     │                      │     │
-│     │◀───────────────────┼─────────────────────│                      │     │
-│     │                    │                     │                      │     │
-│     │   [...process fails again...]            │                      │     │
-│     │                    │                     │                      │     │
-│     │ POST status: ERROR │                     │                      │     │
-│     │───────────────────▶│                     │                      │     │
-│     │                    │ retry_count=1<3     │                      │     │
-│     │                    │ delay = 2s          │                      │     │
-│     │                    │ ...                 │                      │     │
+│     │                    │───────────────────->│                      │     │
 │     │                    │                     │                      │     │
 │     │   [...after 3 failures...]               │                      │     │
 │     │                    │                     │                      │     │
-│     │ POST status: ERROR │                     │                      │     │
-│     │───────────────────▶│                     │                      │     │
-│     │                    │                     │                      │     │
-│     │                    │ retry_count=3≥3     │                      │     │
-│     │                    │ → DEAD_LETTER       │                      │     │
-│     │                    │                     │                      │     │
+│     │                    │ retry_count=3>=3    │                      │     │
+│     │                    │ -> DEAD_LETTER      │                      │     │
 │     │                    │ Move to DLQ         │                      │     │
-│     │                    │────────────────────▶│ dlq.ocr...           │     │
-│     │                    │                     │                      │     │
-│     │                    │──────────────────────────────────────────▶│     │
-│     │                    │                     │   status=DEAD_LETTER │     │
+│     │                    │───────────────────->│ dlq.{method}...      │     │
+│     │                    │────────────────────────────────────────-->│     │
 │     │                    │                     │                      │     │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.3 Heartbeat Flow
+### 5.4 Heartbeat Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -945,52 +985,37 @@
 │     │                      │                              │                 │
 │     │ [every 30 seconds]   │                              │                 │
 │     │                      │                              │                 │
-│     │ POST /internal/      │                              │                 │
-│     │ heartbeat            │                              │                 │
+│     │ POST /api/v1/        │                              │                 │
+│     │ internal/heartbeat   │                              │                 │
 │     │ {                    │                              │                 │
-│     │   service_id,        │                              │                 │
+│     │   instance_id,       │                              │                 │
 │     │   access_key,        │                              │                 │
 │     │   status: "idle",    │                              │                 │
 │     │   current_job_id:    │                              │                 │
 │     │     null             │                              │                 │
 │     │ }                    │                              │                 │
-│     │─────────────────────▶│                              │                 │
-│     │                      │ validate                     │                 │
-│     │                      │ access_key                   │                 │
+│     │─────────────────────>│                              │                 │
+│     │                      │ validate access_key          │                 │
+│     │                      │ (ServiceType APPROVED)       │                 │
 │     │                      │                              │                 │
-│     │                      │ INSERT INTO                  │                 │
-│     │                      │ heartbeats                   │                 │
-│     │                      │─────────────────────────────▶│                 │
+│     │                      │ UPDATE instances             │                 │
+│     │                      │ last_heartbeat_at            │                 │
+│     │                      │─────────────────────────────>│                 │
 │     │                      │                              │                 │
-│     │◀─────────────────────│ 200 OK                       │                 │
+│     │                      │ INSERT INTO heartbeats       │                 │
+│     │                      │─────────────────────────────>│                 │
 │     │                      │                              │                 │
-│     │                      │                              │                 │
-│     │ [processing a job]   │                              │                 │
-│     │                      │                              │                 │
-│     │ POST /internal/      │                              │                 │
-│     │ heartbeat            │                              │                 │
-│     │ {                    │                              │                 │
-│     │   status:"processing"│                              │                 │
-│     │   current_job_id:    │                              │                 │
-│     │     "job_abc",       │                              │                 │
-│     │   progress: {        │                              │                 │
-│     │     files_completed: │                              │                 │
-│     │       2,             │                              │                 │
-│     │     files_total: 5   │                              │                 │
-│     │   }                  │                              │                 │
-│     │ }                    │                              │                 │
-│     │─────────────────────▶│                              │                 │
+│     │<─────────────────────│ 200 OK                       │                 │
 │     │                      │                              │                 │
 │     │                      │ ┌─────────────────────────┐  │                 │
 │     │                      │ │ Heartbeat Monitor Task  │  │                 │
 │     │                      │ │ (runs every 30s)        │  │                 │
 │     │                      │ │                         │  │                 │
-│     │                      │ │ For each service:       │  │                 │
+│     │                      │ │ For each instance:      │  │                 │
 │     │                      │ │ - Check last heartbeat  │  │                 │
-│     │                      │ │ - If > 90s → DEAD       │  │                 │
-│     │                      │ │ - If stalled → reassign │  │                 │
+│     │                      │ │ - If > 90s -> DEAD      │  │                 │
+│     │                      │ │ - If stalled -> reassign │  │                 │
 │     │                      │ └─────────────────────────┘  │                 │
-│     │                      │                              │                 │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1009,7 +1034,7 @@
 │                           │  (Job created)│                                 │
 │                           └───────┬───────┘                                 │
 │                                   │ Auto                                    │
-│                                   ▼                                         │
+│                                   v                                         │
 │                           ┌───────────────┐                                 │
 │                           │  VALIDATING   │                                 │
 │                           │ (Check format)│                                 │
@@ -1019,7 +1044,7 @@
 │                          │                 │                               │
 │                       Valid            Invalid                              │
 │                          │                 │                               │
-│                          ▼                 ▼                               │
+│                          v                 v                               │
 │              ┌───────────────┐     ┌───────────────┐                       │
 │              │    QUEUED     │     │   REJECTED    │                       │
 │              │  (In queue)   │     │  (Terminal)   │                       │
@@ -1029,7 +1054,7 @@
 │          │           │           │                                         │
 │     User Cancel  Worker picks  (stays in queue)                            │
 │          │           │                                                      │
-│          ▼           ▼                                                      │
+│          v           v                                                      │
 │   ┌───────────┐┌───────────────┐                                           │
 │   │ CANCELLED ││  PROCESSING   │                                           │
 │   │(Terminal) ││ (OCR running) │                                           │
@@ -1040,7 +1065,7 @@
 │        Success    Retriable    Non-retriable                               │
 │           │        Error         Error                                     │
 │           │            │            │                                      │
-│           ▼            ▼            ▼                                      │
+│           v            v            v                                      │
 │    ┌───────────┐ ┌──────────┐ ┌───────────┐                               │
 │    │ COMPLETED │ │ RETRYING │ │  FAILED   │                               │
 │    │ (Success) │ │          │ │(Terminal) │                               │
@@ -1049,9 +1074,9 @@
 │                       │ Orchestrator decides:                              │
 │                 ┌─────┼──────┐                                             │
 │               Yes           No                                              │
-│            (retry<3)    (retry≥3)                                          │
+│            (retry<3)    (retry>=3)                                          │
 │                 │            │                                              │
-│                 ▼            ▼                                              │
+│                 v            v                                              │
 │          ┌──────────┐ ┌───────────────┐                                    │
 │          │  QUEUED  │ │  DEAD_LETTER  │                                    │
 │          │(re-enter)│ │  (Terminal)   │                                    │
@@ -1063,7 +1088,7 @@
 │  ┌──────────────────┬──────────────────────────────────────────────────┐   │
 │  │ PROCESSING       │ Any job QUEUED/PROCESSING/RETRYING               │   │
 │  │ COMPLETED        │ All jobs COMPLETED                               │   │
-│  │ PARTIAL_SUCCESS  │ Mix: ≥1 COMPLETED + ≥1 terminal failure         │   │
+│  │ PARTIAL_SUCCESS  │ Mix: >=1 COMPLETED + >=1 terminal failure        │   │
 │  │ FAILED           │ All jobs FAILED/DEAD_LETTER/REJECTED            │   │
 │  │ CANCELLED        │ All jobs CANCELLED                               │   │
 │  └──────────────────┴──────────────────────────────────────────────────┘   │
@@ -1078,17 +1103,34 @@
 | From | To | Protocol | Auth | Data |
 |------|-----|----------|------|------|
 | Client | Frontend | HTTPS | - | HTML/JS |
-| Frontend | API Server | HTTP/REST | Session token | JSON |
+| Frontend | API Server | HTTP/REST | Bearer token (session) | JSON |
 | API Server | Modules | Function call | (internal) | Python objects |
 | Upload Module | MinIO | S3 API | Storage creds | Binary |
 | Job Module | NATS | Publish | - | JSON message |
 | NATS | Worker | Pull | - | JSON message |
-| Worker | File Proxy | HTTP/REST | access_key | Stream/JSON |
+| Worker | Register | HTTP/REST | none (initial) | JSON |
+| Worker | File Proxy | HTTP/REST | access_key (X-Access-Key) | Stream/JSON |
 | File Proxy | MinIO | S3 API | Storage creds | Binary |
-| Worker | Orchestrator | HTTP/REST | access_key | JSON (status/heartbeat) |
+| Worker | Orchestrator | HTTP/REST | access_key (X-Access-Key) | JSON (status/heartbeat) |
+| Admin | API Server | HTTP/REST | Bearer token + is_admin | JSON |
 | All Modules | SQLite | SQL | - | Python objects |
 
 **Layer Boundaries:**
-- Edge ↔ Orchestration: Storage credentials, internal function calls
-- Orchestration ↔ Processing: Queue (NATS), File Proxy API, Heartbeat API
-- Processing → Edge: **FORBIDDEN** (must go through Orchestration)
+- Edge <-> Orchestration: Storage credentials, internal function calls
+- Orchestration <-> Processing: Queue (NATS), File Proxy API, Heartbeat API, Register API
+- Processing -> Edge: **FORBIDDEN** (must go through Orchestration)
+
+---
+
+*Changelog v2.0 -> v3.0:*
+- *Updated all internal endpoint URLs from `/internal/*` to `/api/v1/internal/*`*
+- *Changed job status update from POST to PATCH*
+- *Added Section 3.7: Worker Registration Flow (self-registration on startup)*
+- *Added Section 3.8: Admin Service Management Flow (approve/reject/disable)*
+- *Added Section 5.2: Worker Registration Sequence Diagram*
+- *Updated Processing Layer: multi-engine support (PaddleOCR + Tesseract)*
+- *Updated heartbeat to use `instance_id` instead of `service_id`*
+- *Updated auth flow: Session.token is separate field, User has is_admin*
+- *Updated File Proxy ACL: validates against ServiceType (not Service)*
+- *Updated architecture overview diagram with multi-engine workers*
+- *Backend port: 8080 -> 8000*

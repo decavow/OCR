@@ -1,5 +1,7 @@
 # === Environment ===
 **/.env
+**/.env.*
+**/*env*
 
 # === Python ===
 __pycache__/
@@ -14,6 +16,7 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+nul
 
 # === Node.js ===
 node_modules/
@@ -46,4 +49,8 @@ nul
 collection_tool.py
 ocr.md
 ocr_structure.md
-frontend/stitch_ocr_dashboard_upload
+fe_template
+stitch_ocr_dashboard_upload
+**env
+01_frontend/ocr-platform-mvp-1.zip
+claude

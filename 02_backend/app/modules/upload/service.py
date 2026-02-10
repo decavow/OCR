@@ -8,16 +8,18 @@ from dataclasses import dataclass
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
-from app.infrastructure.database.models import Request, File, Job
+from app.infrastructure.database.models import Request, File, Job, ServiceInstanceStatus
 from app.infrastructure.database.repositories import (
     RequestRepository,
     FileRepository,
     JobRepository,
+    ServiceTypeRepository,
 )
 from app.infrastructure.storage import MinIOStorageService, generate_object_key
 from app.infrastructure.queue import NATSQueueService, JobMessage, get_subject
 from app.config import settings
 from .validators import validate_file, validate_batch
+from .exceptions import ServiceNotAvailable
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class UploadService:
         self.request_repo = RequestRepository(db)
         self.file_repo = FileRepository(db)
         self.job_repo = JobRepository(db)
+        self.service_type_repo = ServiceTypeRepository(db)
 
     async def process_upload(
         self,
@@ -56,6 +59,9 @@ class UploadService:
         tier: int = 0,
     ) -> Request:
         """Process file upload: validate, store, create request and jobs."""
+        # Step 0: Validate method/tier against approved services
+        self._validate_service_available(method, tier)
+
         # Step 1: Validate batch size
         validate_batch(files)
 
@@ -89,6 +95,20 @@ class UploadService:
             )
 
         return request
+
+    def _validate_service_available(self, method: str, tier: int) -> None:
+        """Ensure at least one approved service with active instances can handle this method/tier."""
+        approved_types = self.service_type_repo.get_approved()
+        for st in approved_types:
+            if not self.service_type_repo.can_handle(st, method, tier):
+                continue
+            active_count = sum(
+                1 for inst in st.instances
+                if inst.status in (ServiceInstanceStatus.ACTIVE, ServiceInstanceStatus.PROCESSING)
+            )
+            if active_count > 0:
+                return
+        raise ServiceNotAvailable(method, tier)
 
     async def _validate_single_file(self, upload_file: UploadFile) -> ValidatedFile:
         """Read and validate a single file. Raises exception if invalid."""

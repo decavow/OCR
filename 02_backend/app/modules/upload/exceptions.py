@@ -30,3 +30,12 @@ class BatchTooLarge(UploadError):
             f"Batch size {count} exceeds limit {max_count}",
             code="BATCH_TOO_LARGE"
         )
+
+
+class ServiceNotAvailable(UploadError):
+    """Requested method/tier has no approved service."""
+    def __init__(self, method: str, tier: int):
+        super().__init__(
+            f"No approved service available for method '{method}' tier {tier}",
+            code="SERVICE_NOT_AVAILABLE"
+        )

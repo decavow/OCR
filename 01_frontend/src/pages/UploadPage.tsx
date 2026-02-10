@@ -18,6 +18,7 @@ export default function UploadPage() {
     output_format: 'txt',
     retention_hours: 168,
   })
+  const [servicesAvailable, setServicesAvailable] = useState(false)
 
   const handleUpload = async () => {
     const response = await upload(config)
@@ -50,12 +51,12 @@ export default function UploadPage() {
         </div>
 
         <div className="upload-page-sidebar">
-          <UploadConfig config={config} onChange={setConfig} fileCount={files.length} />
+          <UploadConfig config={config} onChange={setConfig} fileCount={files.length} onServicesLoaded={setServicesAvailable} />
 
           <button
             className="upload-submit-btn primary"
             onClick={handleUpload}
-            disabled={files.length === 0 || uploading}
+            disabled={files.length === 0 || uploading || !servicesAvailable}
           >
             {uploading ? 'Uploading...' : 'Submit Request'}
           </button>

@@ -46,10 +46,7 @@ workers-down:
 	docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml down
 
 # === Admin ===
-# Usage:
-#   make create-admin EMAIL=admin@example.com PASS=secret123
-#   make promote EMAIL=user@example.com
-#   make demote EMAIL=user@example.com
+# admin@gmail.com/admin123
 
 create-admin:
 	docker-compose exec backend python -m app.cli create-admin $(EMAIL) $(PASS)

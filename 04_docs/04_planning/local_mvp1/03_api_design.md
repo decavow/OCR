@@ -1,7 +1,7 @@
 # OCR Platform Local MVP1 - API Design
 
-> Version: 2.0 | Phase: Local MVP 1
-> Aligned with: SA v3.1
+> Version: 3.0 | Phase: Local MVP 1
+> Aligned with: SA v3.1 + Actual Implementation
 
 ---
 
@@ -9,13 +9,18 @@
 
 | Aspect | Specification |
 |--------|---------------|
-| **Base URL** | `http://localhost:8080/api/v1` |
-| **Internal URL** | `http://localhost:8080/internal` |
+| **Base URL** | `http://localhost:8000/api/v1` |
+| **Internal URL** | `http://localhost:8000/api/v1/internal` |
+| **Admin URL** | `http://localhost:8000/api/v1/admin` |
 | **Protocol** | HTTP/1.1 (HTTPS in Phase 2) |
 | **Format** | JSON |
-| **User Auth** | Session token (Cookie or Authorization header) |
+| **User Auth** | Session token (Authorization: Bearer {token}) |
+| **Admin Auth** | Session token + user.is_admin = true |
 | **Worker Auth** | access_key (X-Access-Key header) |
 | **Docs** | Swagger UI: `/docs`, ReDoc: `/redoc` |
+
+> **NOTE:** All routes (public, admin, internal) share the `/api/v1` prefix.
+> Internal endpoints are at `/api/v1/internal/*`, NOT `/internal/*`.
 
 ---
 
@@ -60,8 +65,10 @@
 | `UNAUTHORIZED` | 401 | Missing or invalid auth |
 | `INVALID_CREDENTIALS` | 401 | Wrong email/password |
 | `SESSION_EXPIRED` | 401 | Session no longer valid |
-| `INVALID_ACCESS_KEY` | 401 | Worker access_key invalid |
+| `INVALID_ACCESS_KEY` | 401 | Worker access_key invalid or type not APPROVED |
 | `FORBIDDEN` | 403 | Access denied to resource |
+| `ADMIN_REQUIRED` | 403 | Admin privileges required |
+| `SERVICE_REJECTED` | 403 | Service type permanently rejected |
 | `NOT_FOUND` | 404 | Resource not found |
 | `EMAIL_EXISTS` | 409 | Email already registered |
 | `INVALID_TRANSITION` | 409 | Invalid job state transition |
@@ -93,9 +100,11 @@ POST /api/v1/auth/register
         "user": {
             "id": "usr_abc123",
             "email": "user@example.com",
+            "is_admin": false,
             "created_at": "2024-01-15T10:30:00Z"
         },
-        "token": "ses_xyz789..."
+        "token": "ses_xyz789...",
+        "expires_at": "2024-01-16T10:30:00Z"
     }
 }
 ```
@@ -124,9 +133,11 @@ POST /api/v1/auth/login
         "user": {
             "id": "usr_abc123",
             "email": "user@example.com",
+            "is_admin": false,
             "created_at": "2024-01-15T10:30:00Z"
         },
-        "token": "ses_xyz789..."
+        "token": "ses_xyz789...",
+        "expires_at": "2024-01-16T10:30:00Z"
     }
 }
 ```
@@ -167,6 +178,7 @@ Authorization: Bearer {token}
         "user": {
             "id": "usr_abc123",
             "email": "user@example.com",
+            "is_admin": false,
             "created_at": "2024-01-15T10:30:00Z"
         }
     }
@@ -193,7 +205,7 @@ Content-Type: multipart/form-data
 | `method` | string | No | OCR method (default: `text_raw`) |
 | `tier` | int | No | Processing tier (default: `0`) |
 | `output_format` | string | No | Output format: `txt`, `json` (default: `txt`) |
-| `retention_hours` | int | No | File retention: 1, 6, 24, 168 (default: 24) |
+| `retention_hours` | int | No | File retention (default: 168 = 7 days) |
 
 **Response (201 Created):**
 ```json
@@ -205,11 +217,12 @@ Content-Type: multipart/form-data
             "method": "text_raw",
             "tier": 0,
             "output_format": "txt",
-            "retention_hours": 24,
+            "retention_hours": 168,
             "status": "PROCESSING",
             "total_files": 5,
             "completed_files": 0,
             "failed_files": 0,
+            "expires_at": "2024-01-22T10:30:00Z",
             "created_at": "2024-01-15T10:30:00Z"
         },
         "summary": {
@@ -232,14 +245,6 @@ Content-Type: multipart/form-data
     }
 }
 ```
-
-**Errors:**
-| Code | Condition |
-|------|-----------|
-| `VALIDATION_ERROR` | No files provided |
-| `BATCH_TOO_LARGE` | > 20 files or > 50MB total |
-| `INVALID_FILE` | All files invalid (none processed) |
-| `INVALID_CONFIG` | Invalid output_format or retention_hours |
 
 ---
 
@@ -277,18 +282,6 @@ Authorization: Bearer {token}
                 "failed_files": 0,
                 "created_at": "2024-01-15T10:30:00Z",
                 "completed_at": "2024-01-15T10:35:00Z"
-            },
-            {
-                "id": "req_def456",
-                "method": "text_raw",
-                "tier": 0,
-                "output_format": "txt",
-                "status": "PARTIAL_SUCCESS",
-                "total_files": 5,
-                "completed_files": 3,
-                "failed_files": 2,
-                "created_at": "2024-01-15T11:00:00Z",
-                "completed_at": "2024-01-15T11:10:00Z"
             }
         ],
         "pagination": {
@@ -310,85 +303,7 @@ GET /api/v1/requests/{request_id}
 Authorization: Bearer {token}
 ```
 
-**Response (200 OK):**
-```json
-{
-    "success": true,
-    "data": {
-        "request": {
-            "id": "req_abc123",
-            "method": "text_raw",
-            "tier": 0,
-            "output_format": "txt",
-            "retention_hours": 24,
-            "status": "PARTIAL_SUCCESS",
-            "total_files": 4,
-            "completed_files": 3,
-            "failed_files": 1,
-            "created_at": "2024-01-15T10:30:00Z",
-            "completed_at": "2024-01-15T10:35:00Z"
-        },
-        "jobs": [
-            {
-                "id": "job_001",
-                "file": {
-                    "id": "file_001",
-                    "name": "image1.png",
-                    "size_bytes": 102400,
-                    "page_count": 1
-                },
-                "status": "COMPLETED",
-                "result": {
-                    "id": "res_001",
-                    "format": "txt",
-                    "processing_time_ms": 1250
-                },
-                "retry_count": 0,
-                "created_at": "2024-01-15T10:30:00Z",
-                "started_at": "2024-01-15T10:30:02Z",
-                "completed_at": "2024-01-15T10:30:05Z"
-            },
-            {
-                "id": "job_002",
-                "file": {
-                    "id": "file_002",
-                    "name": "corrupted.jpg",
-                    "size_bytes": 204800,
-                    "page_count": 1
-                },
-                "status": "DEAD_LETTER",
-                "error": {
-                    "message": "OCR processing failed after 3 retries",
-                    "retriable": true
-                },
-                "retry_count": 3,
-                "error_history": [
-                    {"error": "timeout", "retriable": true, "at": "..."},
-                    {"error": "timeout", "retriable": true, "at": "..."},
-                    {"error": "timeout", "retriable": true, "at": "..."}
-                ],
-                "created_at": "2024-01-15T10:30:00Z"
-            },
-            {
-                "id": "job_003",
-                "file": {
-                    "id": "file_003",
-                    "name": "invalid.gif",
-                    "size_bytes": 50000,
-                    "page_count": 1
-                },
-                "status": "REJECTED",
-                "error": {
-                    "message": "Unsupported file format: GIF",
-                    "retriable": false
-                },
-                "retry_count": 0,
-                "created_at": "2024-01-15T10:30:00Z"
-            }
-        ]
-    }
-}
-```
+**Response (200 OK):** Same as v2.0 (includes jobs array with full detail).
 
 ---
 
@@ -398,8 +313,6 @@ Authorization: Bearer {token}
 POST /api/v1/requests/{request_id}/cancel
 Authorization: Bearer {token}
 ```
-
-**Description:** Cancel all jobs that are still in QUEUED status. Jobs already PROCESSING cannot be cancelled.
 
 **Response (200 OK):**
 ```json
@@ -412,36 +325,6 @@ Authorization: Bearer {token}
         "message": "2 jobs cancelled, 1 job already processing"
     }
 }
-```
-
-**Errors:**
-| Code | Condition |
-|------|-----------|
-| `NOT_FOUND` | Request not found |
-| `FORBIDDEN` | Not owner of request |
-| `INVALID_TRANSITION` | No jobs available to cancel |
-
----
-
-### 5.4 Download Request Results (ZIP)
-
-```
-GET /api/v1/requests/{request_id}/download
-Authorization: Bearer {token}
-```
-
-**Query Parameters:**
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `include_failed` | bool | false | Include error info for failed jobs |
-
-**Response (200 OK):**
-```
-Content-Type: application/zip
-Content-Disposition: attachment; filename="req_abc123_results.zip"
-
-[ZIP file containing all result files]
 ```
 
 ---
@@ -473,16 +356,14 @@ Authorization: Bearer {token}
             "status": "COMPLETED",
             "method": "text_raw",
             "tier": 0,
-            "output_format": "txt",
             "retry_count": 0,
             "max_retries": 3,
             "error_history": [],
             "result": {
-                "id": "res_001",
                 "format": "txt",
                 "processing_time_ms": 1250
             },
-            "worker_id": "worker-ocr-text-tier0",
+            "worker_id": "ocr-paddle-abc123",
             "created_at": "2024-01-15T10:30:00Z",
             "started_at": "2024-01-15T10:30:02Z",
             "completed_at": "2024-01-15T10:30:05Z"
@@ -490,6 +371,8 @@ Authorization: Bearer {token}
     }
 }
 ```
+
+> **NOTE:** Job does NOT have `output_format` field. Output format is on the Request level.
 
 ---
 
@@ -507,7 +390,7 @@ Authorization: Bearer {token}
     "data": {
         "job_id": "job_001",
         "format": "txt",
-        "content": "This is the extracted text from the image...\nLine 2 of the text...",
+        "content": "This is the extracted text...",
         "metadata": {
             "word_count": 150,
             "confidence": 0.95
@@ -516,36 +399,14 @@ Authorization: Bearer {token}
 }
 ```
 
-**Errors:**
-| Code | Condition |
-|------|-----------|
-| `NOT_FOUND` | Job not found or no result yet |
-
 ---
 
-### 6.3 Download Job Result (File)
+## 7. File Endpoints
+
+### 7.1 Get Original File URL
 
 ```
-GET /api/v1/jobs/{job_id}/download
-Authorization: Bearer {token}
-```
-
-**Response (200 OK):**
-```
-Content-Type: text/plain
-Content-Disposition: attachment; filename="image1_result.txt"
-
-[file content]
-```
-
----
-
-## 7. File Recovery Endpoints
-
-### 7.1 List Deleted Files
-
-```
-GET /api/v1/files/deleted
+GET /api/v1/files/{file_id}/original-url
 Authorization: Bearer {token}
 ```
 
@@ -554,27 +415,67 @@ Authorization: Bearer {token}
 {
     "success": true,
     "data": {
-        "files": [
+        "url": "https://...",
+        "expires_at": "2024-01-15T11:30:00Z"
+    }
+}
+```
+
+### 7.2 Get Result File URL
+
+```
+GET /api/v1/files/{file_id}/result-url
+Authorization: Bearer {token}
+```
+
+---
+
+## 8. Admin Endpoints (NEW)
+
+> Requires `Authorization: Bearer {token}` with `user.is_admin = true`.
+
+### 8.1 List Service Types
+
+```
+GET /api/v1/admin/service-types
+Authorization: Bearer {admin_token}
+```
+
+**Query Parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `status` | string | - | Filter: PENDING, APPROVED, DISABLED, REJECTED |
+
+**Response (200 OK):**
+```json
+{
+    "success": true,
+    "data": {
+        "service_types": [
             {
-                "id": "file_001",
-                "name": "old_image.png",
-                "size_bytes": 102400,
-                "deleted_at": "2024-01-14T10:30:00Z",
-                "expires_at": "2024-01-21T10:30:00Z",
-                "recoverable": true
+                "id": "ocr-paddle",
+                "display_name": "PaddleOCR Text Raw",
+                "description": "GPU-accelerated OCR",
+                "status": "PENDING",
+                "access_key": null,
+                "allowed_methods": ["text_raw"],
+                "allowed_tiers": [0],
+                "dev_contact": "dev@example.com",
+                "max_instances": 0,
+                "instance_count": 1,
+                "registered_at": "2024-01-15T10:30:00Z"
             }
         ]
     }
 }
 ```
 
----
-
-### 7.2 Recover Deleted File
+### 8.2 Approve Service Type
 
 ```
-POST /api/v1/files/{file_id}/recover
-Authorization: Bearer {token}
+POST /api/v1/admin/service-types/{type_id}/approve
+Authorization: Bearer {admin_token}
 ```
 
 **Response (200 OK):**
@@ -582,26 +483,142 @@ Authorization: Bearer {token}
 {
     "success": true,
     "data": {
-        "file": {
-            "id": "file_001",
-            "name": "old_image.png",
-            "status": "recovered"
-        }
+        "id": "ocr-paddle",
+        "status": "APPROVED",
+        "access_key": "sk_generated_xxx",
+        "approved_at": "2024-01-15T10:35:00Z"
     }
+}
+```
+
+### 8.3 Reject Service Type
+
+```
+POST /api/v1/admin/service-types/{type_id}/reject
+Authorization: Bearer {admin_token}
+```
+
+**Request:**
+```json
+{
+    "reason": "Unverified OCR engine"
+}
+```
+
+### 8.4 Disable/Enable Service Type
+
+```
+POST /api/v1/admin/service-types/{type_id}/disable
+POST /api/v1/admin/service-types/{type_id}/enable
+Authorization: Bearer {admin_token}
+```
+
+### 8.5 Delete Service Type
+
+```
+DELETE /api/v1/admin/service-types/{type_id}
+Authorization: Bearer {admin_token}
+```
+
+### 8.6 List Service Instances
+
+```
+GET /api/v1/admin/service-instances
+Authorization: Bearer {admin_token}
+```
+
+---
+
+## 9. Services Endpoint (Public)
+
+```
+GET /api/v1/services
+Authorization: Bearer {token}
+```
+
+Returns list of available (APPROVED) service types for users.
+
+---
+
+## 10. Internal Endpoints (Worker Use Only)
+
+> These endpoints are for Worker <-> Orchestrator communication.
+> Base URL: `http://ocr-backend:8000/api/v1/internal`
+> Authenticated via `X-Access-Key` header (validated against ServiceType, status=APPROVED).
+
+### 10.1 Worker Registration
+
+```
+POST /api/v1/internal/register
+```
+
+**Request:**
+```json
+{
+    "service_type": "ocr-paddle",
+    "instance_id": "ocr-paddle-abc123def456",
+    "display_name": "PaddleOCR Text Raw",
+    "description": "GPU-accelerated Vietnamese OCR",
+    "dev_contact": "dev@example.com",
+    "allowed_methods": ["text_raw"],
+    "allowed_tiers": [0],
+    "access_key": "sk_local_paddle"
+}
+```
+
+**Response (200 OK) - Type APPROVED:**
+```json
+{
+    "success": true,
+    "data": {
+        "status": "active",
+        "access_key": "sk_local_paddle",
+        "message": "Instance registered and active"
+    }
+}
+```
+
+**Response (200 OK) - Type PENDING:**
+```json
+{
+    "success": true,
+    "data": {
+        "status": "waiting",
+        "message": "Service type pending admin approval"
+    }
+}
+```
+
+**Response (403) - Type REJECTED:**
+```json
+{
+    "success": false,
+    "error": {
+        "code": "SERVICE_REJECTED",
+        "message": "Service type has been rejected"
+    }
+}
+```
+
+### 10.2 Worker Deregistration
+
+```
+POST /api/v1/internal/deregister
+```
+
+**Request:**
+```json
+{
+    "instance_id": "ocr-paddle-abc123def456"
 }
 ```
 
 ---
 
-## 8. Internal Endpoints (Worker Use Only)
-
-> These endpoints are for Worker ↔ Orchestrator communication.
-> Authenticated via `X-Access-Key` header.
-
-### 8.1 File Proxy - Download File
+### 10.3 File Proxy - Download File
 
 ```
-POST /internal/file-proxy/download
+POST /api/v1/internal/file-proxy/download
 X-Access-Key: {worker_access_key}
 ```
 
@@ -620,19 +637,12 @@ Content-Disposition: inline
 [binary file content - streamed]
 ```
 
-**Errors:**
-| Code | Condition |
-|------|-----------|
-| `INVALID_ACCESS_KEY` | Missing or invalid access_key |
-| `FORBIDDEN` | Service not authorized for this job |
-| `NOT_FOUND` | Job or file not found |
-
 ---
 
-### 8.2 File Proxy - Upload Result
+### 10.4 File Proxy - Upload Result
 
 ```
-POST /internal/file-proxy/upload
+POST /api/v1/internal/file-proxy/upload
 X-Access-Key: {worker_access_key}
 Content-Type: multipart/form-data
 ```
@@ -657,19 +667,20 @@ Content-Type: multipart/form-data
 
 ---
 
-### 8.3 Update Job Status
+### 10.5 Update Job Status
 
 ```
-POST /internal/jobs/{job_id}/status
+PATCH /api/v1/internal/jobs/{job_id}/status
 X-Access-Key: {worker_access_key}
 ```
+
+> **NOTE:** This is PATCH (not POST as in v2.0).
 
 **Request - Starting processing:**
 ```json
 {
     "status": "PROCESSING",
-    "started_at": "2024-01-15T10:30:02Z",
-    "worker_id": "worker-ocr-text-tier0"
+    "worker_id": "ocr-paddle-abc123"
 }
 ```
 
@@ -678,8 +689,7 @@ X-Access-Key: {worker_access_key}
 {
     "status": "COMPLETED",
     "result_path": "results/req_abc123/job_001.txt",
-    "processing_time_ms": 1250,
-    "completed_at": "2024-01-15T10:30:05Z"
+    "processing_time_ms": 1250
 }
 ```
 
@@ -703,24 +713,19 @@ X-Access-Key: {worker_access_key}
 }
 ```
 
-**Note:** When Worker reports `status: "ERROR"`, the Orchestrator will:
-1. If `retriable=false` → Set job status to `FAILED`
-2. If `retriable=true` and `retry_count < max_retries` → Set to `RETRYING`, schedule re-queue
-3. If `retriable=true` and `retry_count >= max_retries` → Set to `DEAD_LETTER`
-
 ---
 
-### 8.4 Heartbeat
+### 10.6 Heartbeat
 
 ```
-POST /internal/heartbeat
+POST /api/v1/internal/heartbeat
 X-Access-Key: {worker_access_key}
 ```
 
 **Request:**
 ```json
 {
-    "service_id": "worker-ocr-text-tier0",
+    "instance_id": "ocr-paddle-abc123",
     "status": "processing",
     "current_job_id": "job_abc123",
     "progress": {
@@ -734,7 +739,6 @@ X-Access-Key: {worker_access_key}
 **Status values:**
 - `idle` - Worker waiting for jobs
 - `processing` - Worker processing a job
-- `uploading` - Worker uploading result
 - `error` - Worker in error state
 
 **Response (200 OK):**
@@ -749,13 +753,15 @@ X-Access-Key: {worker_access_key}
 
 ---
 
-## 9. Health & Status Endpoints
+## 11. Health & Status Endpoints
 
-### 9.1 Health Check
+### 11.1 Health Check
 
 ```
 GET /api/v1/health
 ```
+
+> No authentication required. Used by Docker healthcheck.
 
 **Response (200 OK):**
 ```json
@@ -768,99 +774,64 @@ GET /api/v1/health
 
 ---
 
-### 9.2 System Status (Debug)
-
-```
-GET /api/v1/status
-Authorization: Bearer {admin_token}
-```
-
-**Response (200 OK):**
-```json
-{
-    "success": true,
-    "data": {
-        "database": {
-            "status": "connected",
-            "type": "sqlite"
-        },
-        "queue": {
-            "status": "connected",
-            "pending_jobs": 15,
-            "dlq_jobs": 2
-        },
-        "storage": {
-            "status": "connected",
-            "buckets": ["uploads", "results", "deleted"]
-        },
-        "workers": {
-            "registered": 1,
-            "healthy": 1,
-            "dead": 0,
-            "last_heartbeats": [
-                {
-                    "service_id": "worker-ocr-text-tier0",
-                    "status": "idle",
-                    "last_seen": "2024-01-15T10:29:30Z"
-                }
-            ]
-        }
-    }
-}
-```
-
----
-
-## 10. Job Status Enum
+## 12. Job Status Enum
 
 ```python
 class JobStatus(str, Enum):
     # Initial states
-    SUBMITTED = "SUBMITTED"       # Job just created
-    VALIDATING = "VALIDATING"     # File being validated
+    SUBMITTED = "SUBMITTED"
+    VALIDATING = "VALIDATING"
 
     # Active states
-    QUEUED = "QUEUED"             # In queue, waiting for worker
-    PROCESSING = "PROCESSING"     # Worker processing
-    RETRYING = "RETRYING"         # Waiting for retry (after retriable error)
+    QUEUED = "QUEUED"
+    PROCESSING = "PROCESSING"
+    RETRYING = "RETRYING"
 
     # Terminal states - Success
-    COMPLETED = "COMPLETED"       # Successfully done
+    COMPLETED = "COMPLETED"
 
     # Terminal states - Failure
-    FAILED = "FAILED"             # Failed (non-retriable error)
-    REJECTED = "REJECTED"         # File validation failed
-    CANCELLED = "CANCELLED"       # User cancelled (only from QUEUED)
-    DEAD_LETTER = "DEAD_LETTER"   # Exceeded max retries
+    FAILED = "FAILED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+    DEAD_LETTER = "DEAD_LETTER"
 
 class RequestStatus(str, Enum):
-    PROCESSING = "PROCESSING"           # Any job still active
-    COMPLETED = "COMPLETED"             # All jobs completed successfully
-    PARTIAL_SUCCESS = "PARTIAL_SUCCESS" # Mix of success and failure
-    FAILED = "FAILED"                   # All jobs failed
-    CANCELLED = "CANCELLED"             # All jobs cancelled
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+class ServiceTypeStatus(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    DISABLED = "DISABLED"
+    REJECTED = "REJECTED"
+
+class ServiceInstanceStatus(str, Enum):
+    WAITING = "WAITING"
+    ACTIVE = "ACTIVE"
+    PROCESSING = "PROCESSING"
+    DRAINING = "DRAINING"
+    DEAD = "DEAD"
 ```
 
 ---
 
-## 11. API Schemas (Pydantic)
+## 13. API Schemas (Pydantic)
 
-### 11.1 Upload Schemas
+### 13.1 Upload Schemas
 
 ```python
 class UploadRequest(BaseModel):
     method: str = "text_raw"
     tier: int = 0
     output_format: Literal["txt", "json"] = "txt"
-    retention_hours: Literal[1, 6, 24, 168] = 24  # 1h, 6h, 24h, 7d
-
-class UploadResponse(BaseModel):
-    request: RequestSummary
-    summary: UploadSummary
-    jobs: List[JobSummary]
+    retention_hours: int = 168  # 7 days default
 ```
 
-### 11.2 Request Schemas
+### 13.2 Request Schemas
 
 ```python
 class RequestResponse(BaseModel):
@@ -873,11 +844,12 @@ class RequestResponse(BaseModel):
     total_files: int
     completed_files: int
     failed_files: int
+    expires_at: Optional[datetime]
     created_at: datetime
     completed_at: Optional[datetime]
 ```
 
-### 11.3 Job Schemas
+### 13.3 Job Schemas
 
 ```python
 class JobResponse(BaseModel):
@@ -887,7 +859,7 @@ class JobResponse(BaseModel):
     status: JobStatus
     method: str
     tier: int
-    output_format: str
+    # NOTE: No output_format (lives on Request)
     retry_count: int
     max_retries: int
     error_history: List[ErrorEntry]
@@ -898,50 +870,38 @@ class JobResponse(BaseModel):
     completed_at: Optional[datetime]
 ```
 
-### 11.4 Internal Schemas
+### 13.4 Internal Schemas
 
 ```python
-class FileProxyDownloadRequest(BaseModel):
-    job_id: str
+class RegisterRequest(BaseModel):
+    service_type: str
+    instance_id: str
+    display_name: str = ""
+    description: str = ""
+    dev_contact: Optional[str] = None
+    allowed_methods: List[str] = ["text_raw"]
+    allowed_tiers: List[int] = [0]
+    access_key: Optional[str] = None  # For seeded services
 
 class JobStatusUpdate(BaseModel):
     status: Literal["PROCESSING", "COMPLETED", "ERROR"]
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    worker_id: Optional[str]
     result_path: Optional[str]
     processing_time_ms: Optional[int]
-    worker_id: Optional[str]
     error: Optional[str]
     retriable: Optional[bool]
 
 class HeartbeatPayload(BaseModel):
-    service_id: str
-    status: Literal["idle", "processing", "uploading", "error"]
+    instance_id: str
+    status: Literal["idle", "processing", "error"]
     current_job_id: Optional[str]
     progress: Optional[ProgressInfo]
     error_count: int = 0
-
-class ProgressInfo(BaseModel):
-    files_completed: int
-    files_total: int
 ```
 
 ---
 
-## 12. Rate Limits (Phase 2)
-
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| `/auth/login` | 10 | per minute |
-| `/auth/register` | 5 | per minute |
-| `/upload` | 20 | per minute |
-| `/requests` | 100 | per minute |
-| `/jobs/*/download` | 50 | per minute |
-| `/internal/*` | 1000 | per minute |
-
----
-
-## 13. Endpoint Summary by Layer
+## 14. Endpoint Summary by Layer
 
 ### Edge Layer (User-facing)
 
@@ -955,19 +915,53 @@ class ProgressInfo(BaseModel):
 | GET | `/api/v1/requests` | Session | List requests |
 | GET | `/api/v1/requests/{id}` | Session | Get request detail |
 | POST | `/api/v1/requests/{id}/cancel` | Session | Cancel request |
-| GET | `/api/v1/requests/{id}/download` | Session | Download results ZIP |
 | GET | `/api/v1/jobs/{id}` | Session | Get job detail |
 | GET | `/api/v1/jobs/{id}/result` | Session | Get OCR result |
-| GET | `/api/v1/jobs/{id}/download` | Session | Download result file |
-| GET | `/api/v1/files/deleted` | Session | List deleted files |
-| POST | `/api/v1/files/{id}/recover` | Session | Recover file |
+| GET | `/api/v1/files/{id}/original-url` | Session | Get original presigned URL |
+| GET | `/api/v1/files/{id}/result-url` | Session | Get result presigned URL |
+| GET | `/api/v1/services` | Session | List available services |
 | GET | `/api/v1/health` | - | Health check |
+
+### Admin Layer (Admin-only)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/v1/admin/service-types` | Admin | List service types |
+| POST | `/api/v1/admin/service-types/{id}/approve` | Admin | Approve type |
+| POST | `/api/v1/admin/service-types/{id}/reject` | Admin | Reject type |
+| POST | `/api/v1/admin/service-types/{id}/disable` | Admin | Disable type |
+| POST | `/api/v1/admin/service-types/{id}/enable` | Admin | Enable type |
+| DELETE | `/api/v1/admin/service-types/{id}` | Admin | Delete type |
+| GET | `/api/v1/admin/service-instances` | Admin | List instances |
 
 ### Orchestration Layer (Internal - Worker use)
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/internal/file-proxy/download` | access_key | Download source file |
-| POST | `/internal/file-proxy/upload` | access_key | Upload result file |
-| POST | `/internal/jobs/{id}/status` | access_key | Update job status |
-| POST | `/internal/heartbeat` | access_key | Worker heartbeat |
+| POST | `/api/v1/internal/register` | none/access_key | Register worker |
+| POST | `/api/v1/internal/deregister` | access_key | Deregister worker |
+| POST | `/api/v1/internal/file-proxy/download` | access_key | Download source file |
+| POST | `/api/v1/internal/file-proxy/upload` | access_key | Upload result file |
+| **PATCH** | `/api/v1/internal/jobs/{id}/status` | access_key | Update job status |
+| POST | `/api/v1/internal/heartbeat` | access_key | Worker heartbeat |
+
+---
+
+*Changelog v2.0 -> v3.0:*
+- *Base URL port: 8080 -> 8000*
+- *Internal URL: `/internal/*` -> `/api/v1/internal/*`*
+- *Job status update: POST -> **PATCH***
+- *Added `User.is_admin` to auth responses*
+- *Added `Request.expires_at` to request responses*
+- *Added `Session.token` / `expires_at` to auth responses*
+- *Removed `Job.output_format` from job responses (lives on Request)*
+- *Heartbeat uses `instance_id` instead of `service_id`*
+- *Heartbeat status: removed "uploading" (only idle, processing, error)*
+- *Default retention_hours: 24 -> 168 (7 days)*
+- *Added Section 8: Admin Endpoints (service type CRUD)*
+- *Added Section 9: Services Endpoint (public)*
+- *Added Section 10.1-10.2: Worker Register/Deregister*
+- *Added ServiceTypeStatus + ServiceInstanceStatus enums*
+- *File Proxy ACL validates against ServiceType (not legacy Service)*
+- *Removed Section 7 (File Recovery) and 5.4 (Download ZIP) -- not implemented*
+- *Removed Section 9.2 (System Status Debug) -- not implemented*

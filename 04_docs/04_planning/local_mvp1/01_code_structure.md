@@ -1,7 +1,7 @@
 # OCR Platform Local MVP1 - Code Structure
 
-> Version: 2.1 | Phase: Local MVP 1
-> Aligned with: SA v3.1
+> Version: 3.0 | Phase: Local MVP 1
+> Aligned with: SA v3.1 + Actual Implementation
 
 ---
 
@@ -9,55 +9,59 @@
 
 ```
 ocr-platform/
-├── docker-compose.yml          # Orchestration cho all services
-├── .env.example                 # Environment template
-├── .env                         # Local environment (gitignored)
-├── README.md                    # Quick start guide
-├── Makefile                     # Common commands shortcuts
+├── docker-compose.yml          # Infrastructure + Backend (NO frontend/worker)
+├── .env                         # Shared env vars (loaded by all compose files)
+├── Makefile                     # Dev commands: up, down, workers, admin
 │
-├── frontend/                    # React SPA (Edge Layer)
-├── backend/                     # FastAPI Monolith (Edge + Orchestration)
-├── worker/                      # OCR Worker (Processing Layer)
+├── 01_frontend/                 # React SPA (Edge Layer)
+├── 02_backend/                  # FastAPI Monolith (Edge + Orchestration)
+├── 03_worker/                   # OCR Workers (Processing Layer)
+├── 00_test/                     # Test suites (backend, infras, worker)
+├── 04_docs/                     # Documentation
 ├── data/                        # Persistent data (gitignored)
-│   ├── ocr_platform.db          # SQLite database (Orchestration)
+│   ├── ocr_fresh.db             # SQLite database (Orchestration)
 │   ├── nats/                    # NATS JetStream data (Orchestration)
 │   └── minio/                   # MinIO object storage (Edge)
-└── docs/                        # Documentation
+├── collection_tool.py           # Utility script
+├── ocr.md                       # Project notes
+└── ocr_structure.md             # Structure reference
 ```
 
 **Layer Mapping:**
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  EDGE LAYER                                                  │
-│  ├── frontend/          (React SPA)                         │
-│  ├── backend/app/api/   (API Server - entry point)          │
-│  └── MinIO container    (Object Storage)                    │
+│  ├── 01_frontend/          (React SPA)                      │
+│  ├── 02_backend/app/api/   (API Server - entry point)       │
+│  └── MinIO container       (Object Storage)                 │
 ├─────────────────────────────────────────────────────────────┤
 │  ORCHESTRATION LAYER                                         │
-│  ├── backend/app/modules/       (Auth, Upload, Job, FileProxy)│
-│  ├── backend/app/infrastructure/ (DB, Queue, Storage Client)│
-│  └── NATS container             (Message Queue)             │
+│  ├── 02_backend/app/modules/       (Auth, Upload, Job, FileProxy)│
+│  ├── 02_backend/app/infrastructure/ (DB, Queue, Storage Client)│
+│  └── NATS container                (Message Queue)          │
 ├─────────────────────────────────────────────────────────────┤
 │  PROCESSING LAYER                                            │
-│  └── worker/            (OCR Worker - Tesseract)            │
+│  └── 03_worker/            (OCR Workers - Multi-Engine)     │
+│      ├── engines/paddle_text/  (PaddleOCR - GPU)            │
+│      └── engines/tesseract/    (Tesseract - CPU)            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Removed from v2.0:**
-- `scripts/` directory — services initialized via docker compose entrypoints
-- `alembic/` — fresh build, no migration needed Phase 1
-- `infrastructure/cleanup/` — no hard delete, files persist in MinIO
+**Deployment Model:**
+- **Root docker-compose.yml**: Infrastructure (MinIO, NATS) + Backend only
+- **Workers**: Each engine has its own `docker-compose.yml` in `03_worker/deploy/<name>/`
+- **Frontend**: Runs separately (dev server or own compose)
 
 ---
 
 ## 2. Frontend Structure (React + TypeScript + Vite)
 
-> Cấu trúc frontend được thiết kế dựa trên sample UI — Result Viewer layout
-> với split-panel (original image + extracted text), file navigation trong batch,
-> và download options (TXT, JSON, Copy).
+> UI layout: Sidebar navigation + main content area.
+> Result Viewer: split-panel (original image + extracted text), file navigation, download options.
+> Admin panel: Service Type management (approve/reject/disable).
 
 ```
-frontend/
+01_frontend/
 ├── Dockerfile
 ├── package.json
 ├── vite.config.ts
@@ -73,22 +77,24 @@ frontend/
     ├── vite-env.d.ts
     │
     ├── config/
-    │   └── index.ts             # API_BASE_URL, constants
+    │   └── index.ts             # API_BASE_URL from VITE_API_BASE_URL
     │
     ├── types/
     │   ├── index.ts             # Export all types
-    │   ├── auth.ts              # User, Session types
-    │   ├── batch.ts             # Batch (= Request in backend) types
-    │   ├── job.ts               # JobStatus enum (all states), Job type
-    │   └── file.ts              # File, UploadFile, ResultFile types
+    │   ├── auth.ts              # User (incl. is_admin), LoginRequest, AuthResponse
+    │   ├── batch.ts             # BatchStatus enum, Batch type, BatchListResponse
+    │   ├── job.ts               # JobStatus enum (all states), Job, ErrorEntry, JobResult
+    │   └── file.ts              # FileInfo, UploadFile, UploadConfig, PresignedUrlResponse
     │
     ├── api/
-    │   ├── client.ts            # Axios instance + interceptors
+    │   ├── client.ts            # Axios instance + interceptors (Bearer token)
     │   ├── auth.ts              # login(), register(), logout(), getMe()
     │   ├── upload.ts            # uploadFiles(files, config)
     │   ├── batches.ts           # getBatches(), getBatch(id), cancelBatch(id)
     │   ├── jobs.ts              # getJob(id), getJobResult(id)
-    │   └── files.ts             # getOriginalUrl(id), getResultUrl(id), downloadResult(id, format)
+    │   ├── files.ts             # getOriginalUrl(id), getResultUrl(id), downloadResult(id, format)
+    │   ├── services.ts          # Service-related API calls
+    │   └── admin.ts             # Admin API: service type CRUD (approve, reject, disable, delete)
     │
     ├── hooks/
     │   ├── useAuth.ts           # Authentication state
@@ -102,11 +108,11 @@ frontend/
     │
     ├── components/
     │   ├── layout/
-    │   │   ├── AppHeader.tsx        # Top nav: logo, Dashboard/Batches/Settings links,
-    │   │   │                        # notification bell, user avatar
-    │   │   ├── Sidebar.tsx          # Optional sidebar for batch list
-    │   │   ├── MainLayout.tsx       # Layout wrapper (header + content area)
-    │   │   └── StatusBar.tsx        # Bottom bar: system status, OCR engine version
+    │   │   ├── MainLayout.tsx       # Sidebar + Outlet (main content area)
+    │   │   ├── Sidebar.tsx          # Navigation: Dashboard, Batches, Upload, Settings
+    │   │   │                        # Admin section: Service Management (if is_admin)
+    │   │   ├── AppHeader.tsx        # Exists but NOT used in MainLayout
+    │   │   └── StatusBar.tsx        # Bottom bar (TODO/stub)
     │   │
     │   ├── auth/
     │   │   ├── LoginForm.tsx
@@ -117,133 +123,92 @@ frontend/
     │   │   ├── DropZone.tsx         # Drag-drop area with file picker
     │   │   ├── FileList.tsx         # Selected files before upload
     │   │   ├── FileItem.tsx         # Single file row (name, size, type, status)
-    │   │   ├── UploadConfig.tsx     # Output format selector (TXT/JSON),
-    │   │   │                        # retention selector
+    │   │   ├── UploadConfig.tsx     # Output format selector, retention selector
     │   │   └── UploadProgress.tsx   # Upload progress bar
     │   │
     │   ├── batch/
     │   │   ├── BatchCard.tsx        # Batch summary: file count, status, date
     │   │   ├── BatchList.tsx        # List/grid of batches on Batches page
-    │   │   ├── BatchStatus.tsx      # Status badge (Processing, Completed,
-    │   │   │                        # Partial Success, Failed, Cancelled)
+    │   │   ├── BatchStatus.tsx      # Status badge (all states incl. PARTIAL_SUCCESS)
     │   │   ├── BatchFileList.tsx    # Files within a batch (for batch detail view)
     │   │   └── CancelButton.tsx     # Cancel batch (only if QUEUED jobs remain)
     │   │
     │   ├── result/
-    │   │   ├── ResultViewer.tsx      # ★ Main split-panel component:
-    │   │   │                         #   Left panel  = OriginalPreview
-    │   │   │                         #   Right panel = ExtractedText
-    │   │   │
-    │   │   ├── OriginalPreview.tsx   # Left panel: image/PDF preview of source file
-    │   │   │                         # Loads original from MinIO via presigned URL
-    │   │   │
-    │   │   ├── ExtractedText.tsx     # Right panel: OCR text result with
-    │   │   │                         # line numbers, scroll sync
-    │   │   │
-    │   │   ├── ResultToolbar.tsx     # "Extracted Text Result" header bar:
-    │   │   │                         # download TXT, download JSON, Copy button
-    │   │   │
-    │   │   ├── ResultMetadata.tsx    # Service, Tier, Processing Time, Version badges
-    │   │   │
-    │   │   ├── FileNavigator.tsx     # Breadcrumb: "← Back to Batch #1024"
-    │   │   │                         # File name + Processed badge
-    │   │   │                         # "< File 3 of 15 >" prev/next arrows
-    │   │   │
-    │   │   └── TextCursor.tsx        # Bottom-right: "Ln 22, Col 1" indicator
+    │   │   ├── ResultViewer.tsx      # Split-panel: OriginalPreview + ExtractedText
+    │   │   ├── OriginalPreview.tsx   # Left panel: image/PDF preview
+    │   │   ├── ExtractedText.tsx     # Right panel: OCR text with line numbers
+    │   │   ├── ResultToolbar.tsx     # Download TXT, download JSON, Copy button
+    │   │   ├── ResultMetadata.tsx    # Service, Tier, Processing Time badges
+    │   │   ├── FileNavigator.tsx     # Breadcrumb + "< File 3 of 15 >" navigation
+    │   │   └── TextCursor.tsx        # Bottom-right "Ln 22, Col 1" indicator
     │   │
     │   ├── job/
-    │   │   ├── JobItem.tsx          # Job row in batch detail (file name + status)
-    │   │   └── JobStatus.tsx        # All states: SUBMITTED, VALIDATING, QUEUED,
-    │   │                            # PROCESSING, COMPLETED, PARTIAL_SUCCESS,
-    │   │                            # FAILED, REJECTED, CANCELLED, DEAD_LETTER
+    │   │   ├── JobItem.tsx          # Job row in batch detail
+    │   │   └── JobStatus.tsx        # All states including DEAD_LETTER
     │   │
     │   └── common/
     │       ├── Button.tsx
-    │       ├── IconButton.tsx       # For nav arrows, copy, download icons
+    │       ├── IconButton.tsx
     │       ├── Input.tsx
-    │       ├── Select.tsx           # For output format selection
-    │       ├── Badge.tsx            # Status badges, tier badges
+    │       ├── Select.tsx
+    │       ├── Badge.tsx
     │       ├── Modal.tsx
     │       ├── Loading.tsx
-    │       ├── Breadcrumb.tsx       # "← Back to Batch #1024" pattern
+    │       ├── Breadcrumb.tsx
     │       └── ErrorMessage.tsx
     │
     ├── pages/
     │   ├── LoginPage.tsx
     │   ├── RegisterPage.tsx
     │   ├── DashboardPage.tsx        # Overview: recent batches, quick stats
-    │   ├── BatchesPage.tsx          # ★ All batches list (nav: "Batches")
+    │   ├── BatchesPage.tsx          # All batches list
     │   ├── BatchDetailPage.tsx      # Single batch: file list + statuses
-    │   ├── ResultViewerPage.tsx     # ★ Split-panel result viewer (from sample UI)
+    │   ├── ResultViewerPage.tsx     # Split-panel result viewer
     │   ├── UploadPage.tsx           # File upload + config
-    │   ├── SettingsPage.tsx         # User settings (from nav: "Settings")
+    │   ├── SettingsPage.tsx         # User settings
+    │   ├── AdminServicesPage.tsx    # Admin: Service Type management (CRUD)
     │   └── NotFoundPage.tsx
     │
     ├── utils/
-    │   ├── formatters.ts            # Date, size, duration formatters
-    │   ├── validators.ts            # Client-side file validation
-    │   └── clipboard.ts             # Copy to clipboard utility
+    │   ├── formatters.ts
+    │   ├── validators.ts
+    │   └── clipboard.ts
     │
     └── styles/
-        ├── globals.css
+        ├── globals.css              # Dark theme CSS variables
         └── variables.css
 ```
 
-**UI Flow (based on sample):**
+**Routes (from App.tsx):**
 
-```
-Login ──▶ Dashboard ──▶ Upload Page (drag-drop + config)
-                │                │
-                │                ▼
-                │         Batches Page ◄── nav link "Batches"
-                │                │
-                │                ▼
-                ├──────▶ Batch Detail Page
-                │         (file list, statuses, cancel button)
-                │                │
-                │                ▼ click file
-                │
-                └──────▶ Result Viewer Page ★
-                          ┌──────────────────────────────────────┐
-                          │ ← Back to Batch #1024                │
-                          │ invoice_scan_003.jpg [Processed]     │
-                          │                    < File 3 of 15 >  │
-                          ├──────────────┬───────────────────────┤
-                          │              │ Extracted Text Result │
-                          │  Original    │ [TXT] [JSON] [Copy]  │
-                          │  Preview     │                       │
-                          │  (image/PDF) │ SERVICE: ocr_text_raw │
-                          │              │ TIER: Local           │
-                          │              │ TIME: 1.2s            │
-                          │              │ VERSION: 1.0.4        │
-                          │              │                       │
-                          │              │ INVOICE #1024         │
-                          │              │ Date: October 24...   │
-                          │              │ ...                   │
-                          ├──────────────┴───────────────────────┤
-                          │ Original Source    Ln 22, Col 1      │
-                          │ System Online    OCR Engine v2.1     │
-                          └──────────────────────────────────────┘
-```
+| Route | Page | Auth | Admin |
+|-------|------|------|-------|
+| `/login` | LoginPage | Public | - |
+| `/register` | RegisterPage | Public | - |
+| `/`, `/dashboard` | DashboardPage | Protected | - |
+| `/batches` | BatchesPage | Protected | - |
+| `/batches/:id` | BatchDetailPage | Protected | - |
+| `/batches/:batchId/files/:fileId` | ResultViewerPage | Protected | - |
+| `/upload` | UploadPage | Protected | - |
+| `/settings` | SettingsPage | Protected | - |
+| `/admin/services` | AdminServicesPage | Protected | Admin only |
 
 **Key Frontend Decisions:**
 
 | Decision | Rationale |
 |----------|-----------|
-| **UI dùng "Batch" thay vì "Request"** | Tự nhiên hơn cho user. Backend vẫn giữ `requests` table, frontend mapping Batch ↔ Request. |
-| **Result Viewer split-panel** | Cho phép user so sánh source image với extracted text side-by-side. Quan trọng cho QA workflow. |
-| **File navigator (prev/next)** | User duyệt qua nhiều files trong một batch nhanh chóng, không cần quay về batch detail. |
-| **Download từ MinIO** | Result files lưu vĩnh viễn trong MinIO. User chọn download format (TXT/JSON). API trả presigned URL hoặc stream content. |
-| **Copy button** | Quick action phổ biến nhất — copy text result vào clipboard. |
-| **Line/Column indicator** | Hữu ích khi user cần reference vị trí cụ thể trong kết quả OCR. |
-| **Status bar** | Hiển thị system health và OCR engine version. Observable by default. |
+| **Sidebar navigation (not top nav)** | MainLayout uses Sidebar + Outlet. AppHeader exists but is unused. |
+| **UI dùng "Batch" thay vi "Request"** | Backend giữ `requests` table, frontend mapping Batch = Request. |
+| **Admin-only Service Management** | Sidebar shows "Service Management" link only if `user.is_admin`. |
+| **Result Viewer split-panel** | Side-by-side comparison (source ↔ extracted text) for QA. |
+| **Dark theme** | CSS variables for dark theme in globals.css. |
 
 ---
 
 ## 3. Backend Structure (FastAPI + Python)
 
 ```
-backend/
+02_backend/
 ├── Dockerfile
 ├── requirements.txt
 ├── pyproject.toml
@@ -252,6 +217,7 @@ backend/
     ├── __init__.py
     ├── main.py                  # FastAPI app entry, lifespan events, routers mount
     ├── config.py                # Settings from env vars (Pydantic BaseSettings)
+    ├── cli.py                   # CLI commands: create-admin, promote, demote
     │
     ├── api/                     # API Layer (Edge)
     │   ├── __init__.py
@@ -266,13 +232,19 @@ backend/
     │       │   ├── auth.py      # POST /auth/register, /auth/login, /auth/logout, GET /auth/me
     │       │   ├── upload.py    # POST /upload (multipart files + config)
     │       │   ├── requests.py  # GET /requests, /requests/:id, POST /requests/:id/cancel
-    │       │   ├── jobs.py      # GET /jobs/:id, /jobs/:id/result (text content)
-    │       │   ├── files.py     # GET /files/:id/original-url, /files/:id/result-url,
-    │       │   │                #     /files/:id/download?format=txt|json
-    │       │   └── health.py    # GET /health (DB + NATS + MinIO readiness)
+    │       │   ├── jobs.py      # GET /jobs/:id, /jobs/:id/result
+    │       │   ├── files.py     # GET /files/:id/original-url, /files/:id/result-url
+    │       │   ├── health.py    # GET /health (DB + NATS + MinIO readiness)
+    │       │   ├── services.py  # GET /services (public service info)
+    │       │   │
+    │       │   └── admin/       # Admin-only endpoints
+    │       │       ├── __init__.py
+    │       │       ├── service_types.py      # CRUD for service types (approve, reject, disable)
+    │       │       └── service_instances.py  # Manage service instances
     │       │
-    │       ├── internal/        # Internal endpoints (Worker ↔ Orchestration)
+    │       ├── internal/        # Internal endpoints (Worker <-> Orchestration)
     │       │   ├── __init__.py
+    │       │   ├── register.py      # POST /internal/register, /internal/deregister
     │       │   ├── file_proxy.py    # POST /internal/file-proxy/download
     │       │   │                    # POST /internal/file-proxy/upload
     │       │   ├── heartbeat.py     # POST /internal/heartbeat
@@ -283,10 +255,11 @@ backend/
     │           ├── auth.py      # LoginRequest, RegisterRequest, UserResponse
     │           ├── upload.py    # UploadConfig (output_format, retention_hours)
     │           ├── request.py   # RequestResponse (total, completed, failed counts)
-    │           ├── job.py       # JobStatus enum, JobResponse, JobResultResponse
+    │           ├── job.py       # JobStatus enum, JobResponse
     │           ├── file.py      # FileResponse, PresignedUrlResponse
     │           ├── file_proxy.py # FileProxyDownloadReq, FileProxyUploadReq
     │           ├── heartbeat.py # HeartbeatPayload
+    │           ├── register.py  # Worker registration schemas
     │           └── common.py    # ErrorResponse, PaginatedResponse
     │
     ├── modules/                 # Business Logic (Orchestration Layer)
@@ -309,7 +282,7 @@ backend/
     │   │   ├── service.py       # JobService: create_request, get_status, cancel
     │   │   ├── orchestrator.py  # RetryOrchestrator: handle_failure(), decide_retry_or_dlq()
     │   │   ├── state_machine.py # JobStateMachine: validate_transition(), get_request_status()
-    │   │   ├── heartbeat_monitor.py # HeartbeatMonitor: check_workers(), detect_stalled()
+    │   │   ├── heartbeat_monitor.py # HeartbeatMonitor: check_instances(), detect_stalled()
     │   │   └── exceptions.py    # JobNotFound, InvalidTransition, AlreadyCancelled
     │   │
     │   └── file_proxy/
@@ -327,110 +300,161 @@ backend/
     │   │   ├── models.py        # SQLAlchemy models (all tables)
     │   │   └── repositories/
     │   │       ├── __init__.py
-    │   │       ├── base.py      # BaseRepository (CRUD helpers)
-    │   │       ├── user.py      # UserRepository
-    │   │       ├── session.py   # SessionRepository
-    │   │       ├── request.py   # RequestRepository
-    │   │       ├── job.py       # JobRepository
-    │   │       ├── file.py      # FileRepository
-    │   │       ├── service.py   # ServiceRepository
-    │   │       └── heartbeat.py # HeartbeatRepository
+    │   │       ├── base.py          # BaseRepository (CRUD helpers)
+    │   │       ├── user.py          # UserRepository
+    │   │       ├── session.py       # SessionRepository
+    │   │       ├── request.py       # RequestRepository
+    │   │       ├── job.py           # JobRepository
+    │   │       ├── file.py          # FileRepository
+    │   │       ├── service.py       # ServiceRepository (legacy)
+    │   │       ├── service_type.py  # ServiceTypeRepository
+    │   │       ├── service_instance.py # ServiceInstanceRepository
+    │   │       └── heartbeat.py     # HeartbeatRepository
     │   │
     │   ├── storage/
     │   │   ├── __init__.py
     │   │   ├── interface.py     # IStorageService (abstract)
-    │   │   │                    # NOTE: Used by Edge layer (Upload via API context)
-    │   │   │                    # and Orchestration layer (File Proxy with credentials).
-    │   │   │                    # Processing layer MUST NOT import this module.
-    │   │   ├── minio_client.py  # MinIOStorageService: upload, download, presigned_url,
-    │   │   │                    # move_to_deleted (soft delete only, no hard purge)
+    │   │   ├── minio_client.py  # MinIOStorageService: upload, download, presigned_url
+    │   │   ├── exceptions.py    # StorageError, ObjectNotFoundError
     │   │   └── utils.py         # generate_object_key(), parse_object_key()
     │   │
     │   └── queue/
     │       ├── __init__.py
     │       ├── interface.py     # IQueueService (abstract)
     │       ├── nats_client.py   # NATSQueueService: publish, pull, ack, nak
-    │       ├── subjects.py      # Subject patterns, DLQ subjects
-    │       └── messages.py      # JobMessage dataclass
+    │       ├── subjects.py      # get_subject(), get_dlq_subject(), parse_subject()
+    │       └── messages.py      # JobMessage dataclass (incl. object_key field)
     │
     ├── core/
     │   ├── __init__.py
     │   ├── exceptions.py        # Base exceptions hierarchy
     │   ├── logging.py           # Structured JSON logger setup
-    │   ├── lifespan.py          # ★ Application startup/shutdown:
-    │   │                        #   startup: ensure NATS streams, MinIO buckets,
-    │   │                        #            SQLite WAL, seed services
+    │   ├── lifespan.py          # Application startup/shutdown:
+    │   │                        #   startup: DB tables, MinIO buckets, NATS streams,
+    │   │                        #            seed services (dev convenience)
     │   │                        #   shutdown: close connections gracefully
     │   └── middleware.py        # Error handler, request timing, request logging
 ```
+
+**Router Mounting (from router.py):**
+
+| Prefix | Module | Tags |
+|--------|--------|------|
+| `/auth` | `endpoints/auth.py` | auth |
+| `/upload` | `endpoints/upload.py` | upload |
+| `/requests` | `endpoints/requests.py` | requests |
+| `/jobs` | `endpoints/jobs.py` | jobs |
+| `/files` | `endpoints/files.py` | files |
+| `/health` | `endpoints/health.py` | health |
+| `/services` | `endpoints/services.py` | services |
+| `/admin/service-types` | `endpoints/admin/service_types.py` | admin |
+| `/admin/service-instances` | `endpoints/admin/service_instances.py` | admin |
+| `/internal` | `internal/register.py` | internal |
+| `/internal/file-proxy` | `internal/file_proxy.py` | internal |
+| `/internal` | `internal/heartbeat.py` | internal |
+| `/internal` | `internal/job_status.py` | internal |
+
+> All routes are prefixed with `/api/v1` by `main.py`.
+> Internal endpoints are at `/api/v1/internal/*` (NOT `/internal/*`).
 
 ---
 
 ## 4. Worker Structure (Python - Processing Layer)
 
 ```
-worker/
-├── Dockerfile
+03_worker/
+├── Dockerfile               # GPU-capable (PaddleOCR + CUDA)
+├── Dockerfile.cpu           # CPU-only (Tesseract)
 ├── requirements.txt
+├── setup_gpu.sh             # GPU environment setup (Linux)
+├── setup_gpu.bat            # GPU environment setup (Windows)
 │
-└── app/
-    ├── __init__.py
-    ├── main.py                  # Worker entry point, signal handlers, main loop
-    ├── config.py                # Worker settings (NO MINIO_* vars)
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # Worker entry point, signal handlers, main loop
+│   ├── config.py            # Worker settings (NO MINIO_* vars)
+│   │                        # Uses WORKER_SERVICE_TYPE + hostname for instance_id
+│   │
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── worker.py        # OCRWorker class (poll -> download -> process -> upload)
+│   │   ├── processor.py     # OCRProcessor: engine dispatching
+│   │   ├── state.py         # WorkerState: tracking current job, progress
+│   │   └── shutdown.py      # GracefulShutdown: SIGTERM/SIGINT handler
+│   │
+│   ├── clients/
+│   │   ├── __init__.py
+│   │   ├── queue_client.py      # NATS pull subscriber (specific subject filter)
+│   │   ├── file_proxy_client.py # HTTP client: POST /internal/file-proxy/download|upload
+│   │   ├── orchestrator_client.py # HTTP client: PATCH /internal/jobs/:id/status
+│   │   └── heartbeat_client.py  # HTTP client: POST /internal/heartbeat (every 30s)
+│   │
+│   ├── engines/                  # Multi-engine OCR support
+│   │   ├── __init__.py
+│   │   ├── base.py               # BaseEngine (interface)
+│   │   │
+│   │   ├── paddle_text/          # PaddleOCR engine (GPU)
+│   │   │   ├── __init__.py
+│   │   │   ├── handler.py        # TextRawHandler: PaddleOCR text extraction
+│   │   │   ├── preprocessing.py  # Image preprocessing for Paddle
+│   │   │   └── postprocessing.py # Result formatting
+│   │   │
+│   │   └── tesseract/            # Tesseract engine (CPU)
+│   │       ├── __init__.py
+│   │       ├── handler.py        # TextRawTesseractHandler: Tesseract extraction
+│   │       ├── preprocessing.py  # Image preprocessing for Tesseract
+│   │       └── postprocessing.py # Result formatting
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── errors.py            # classify_error() -> retriable | non_retriable
+│       └── cleanup.py           # cleanup_local_files() -- MUST run after every job
+│
+└── deploy/                      # Per-engine deployment configs
+    ├── paddle-text/             # PaddleOCR GPU deployment
+    │   ├── docker-compose.yml   # Uses nvidia runtime, GPU resources
+    │   └── .env.example         # WORKER_SERVICE_TYPE=ocr-paddle, etc.
     │
-    ├── core/
-    │   ├── __init__.py
-    │   ├── worker.py            # OCRWorker class (poll → download → process → upload loop)
-    │   ├── processor.py         # OCRProcessor: Tesseract wrapper
-    │   ├── state.py             # WorkerState: tracking current job, progress
-    │   └── shutdown.py          # ★ GracefulShutdown: SIGTERM/SIGINT handler
-    │                            #   finish current job or NAK, cleanup, exit
-    │
-    ├── clients/
-    │   ├── __init__.py
-    │   ├── queue_client.py      # NATS pull subscriber (specific subject filter)
-    │   ├── file_proxy_client.py # HTTP client: POST /internal/file-proxy/download|upload
-    │   ├── orchestrator_client.py # HTTP client: PATCH /internal/jobs/:id/status
-    │   └── heartbeat_client.py  # HTTP client: POST /internal/heartbeat (every 30s)
-    │
-    ├── handlers/
-    │   ├── __init__.py
-    │   ├── base.py              # BaseHandler (interface)
-    │   └── text_raw.py          # TextRawHandler: Tesseract text extraction (Phase 1)
-    │
-    ├── utils/
-    │   ├── __init__.py
-    │   ├── errors.py            # classify_error() → retriable | non_retriable
-    │   └── cleanup.py           # cleanup_local_files() — MUST run after every job
+    └── tesseract-cpu/           # Tesseract CPU deployment
+        ├── docker-compose.yml   # CPU-only, lighter resources
+        └── .env.example         # WORKER_SERVICE_TYPE=ocr-tesseract, etc.
 ```
 
+**Worker Identity Model:**
+- `WORKER_SERVICE_TYPE`: The type of worker (e.g., `ocr-paddle`, `ocr-tesseract`)
+- `WORKER_SERVICE_ID` (optional): Explicit instance ID override
+- Auto-generated `instance_id`: `{service_type}-{hostname[:12]}` (Docker container ID)
+
 **Worker Constraints (unchanged):**
-- **NO MINIO_* environment variables** — Worker cannot access storage directly
-- **Has ACCESS_KEY** for File Proxy authentication
-- **Does NOT retry** — reports errors to Orchestrator
+- **NO MINIO_* environment variables** -- Worker cannot access storage directly
+- **Has ACCESS_KEY** for File Proxy authentication (or empty if waiting for approval)
+- **Does NOT retry** -- reports errors to Orchestrator
 - **Sends heartbeat** every 30 seconds
 - **Cleans up local files** after each job
-- **Handles SIGTERM gracefully** — finish or NAK current job before exit
+- **Handles SIGTERM gracefully** -- finish or NAK current job before exit
+- **Self-registers** on startup via POST /internal/register
 
 ---
 
 ## 5. Database Models (SQLite - Orchestration Layer)
 
 ```python
-# backend/app/infrastructure/database/models.py
+# 02_backend/app/infrastructure/database/models.py
 
 class User(Base):
     __tablename__ = "users"
     id: str                      # UUID, primary key
-    email: str                   # Unique, validated
+    email: str                   # Unique, indexed
     password_hash: str           # bcrypt
+    is_admin: bool               # Admin flag (default False)
     created_at: datetime
     deleted_at: datetime | None  # Soft delete
 
 class Session(Base):
     __tablename__ = "sessions"
-    id: str                      # UUID (token)
+    id: str                      # UUID (primary key, NOT the token)
     user_id: str                 # FK -> users
+    token: str                   # Unique, indexed (64 chars, used for auth)
     expires_at: datetime
     created_at: datetime
 
@@ -441,33 +465,14 @@ class Request(Base):
     method: str                  # e.g., "text_raw"
     tier: int                    # e.g., 0
     output_format: str           # e.g., "txt", "json"
-    retention_hours: int         # Per-request retention (for future use)
+    retention_hours: int         # Default 168 (7 days)
     status: str                  # Aggregated from jobs
     total_files: int
     completed_files: int         # Count of COMPLETED
     failed_files: int            # Count of FAILED + DEAD_LETTER
     created_at: datetime
+    expires_at: datetime | None  # Calculated expiry
     completed_at: datetime | None
-    deleted_at: datetime | None
-
-class Job(Base):
-    __tablename__ = "jobs"
-    id: str                      # UUID
-    request_id: str              # FK -> requests
-    file_id: str                 # FK -> files
-    status: str                  # Full state machine
-    method: str
-    tier: int
-    output_format: str
-    retry_count: int             # 0-3
-    max_retries: int             # Default 3
-    error_history: str           # JSON array [{error, retriable, timestamp}]
-    started_at: datetime | None
-    completed_at: datetime | None
-    processing_time_ms: int | None
-    result_path: str | None      # Object key in results bucket (MinIO Edge)
-    worker_id: str | None        # Which worker processed
-    created_at: datetime
     deleted_at: datetime | None
 
 class File(Base):
@@ -480,75 +485,155 @@ class File(Base):
     page_count: int              # 1 for images
     object_key: str              # MinIO key in uploads bucket
     created_at: datetime
-    deleted_at: datetime | None  # Soft delete only (no hard purge)
+    deleted_at: datetime | None
 
-class Service(Base):
-    __tablename__ = "services"
-    id: str                      # e.g., "worker-ocr-text-tier0"
-    access_key: str              # Unique, for File Proxy auth
+class Job(Base):
+    __tablename__ = "jobs"
+    id: str                      # UUID
+    request_id: str              # FK -> requests
+    file_id: str                 # FK -> files
+    status: str                  # Full state machine
+    method: str
+    tier: int
+    # NOTE: No output_format field on Job (lives on Request)
+    retry_count: int             # 0-3
+    max_retries: int             # Default 3
+    error_history: str           # JSON array [{error, retriable, timestamp}]
+    started_at: datetime | None
+    completed_at: datetime | None
+    processing_time_ms: int | None
+    result_path: str | None      # Object key in results bucket (MinIO Edge)
+    worker_id: str | None        # Which worker instance processed
+    created_at: datetime
+    deleted_at: datetime | None
+
+# === Service Type / Instance Model (replaces legacy Service) ===
+
+class ServiceTypeStatus:
+    PENDING = "PENDING"          # Waiting for admin approval
+    APPROVED = "APPROVED"        # Active, instances can process jobs
+    DISABLED = "DISABLED"        # Temporarily paused
+    REJECTED = "REJECTED"        # Permanently rejected (terminal)
+
+class ServiceInstanceStatus:
+    WAITING = "WAITING"          # Type not yet approved
+    ACTIVE = "ACTIVE"            # Idle, ready for jobs
+    PROCESSING = "PROCESSING"    # Currently processing a job
+    DRAINING = "DRAINING"        # Finishing current job, won't take new
+    DEAD = "DEAD"                # Shutdown/disconnected
+
+class ServiceType(Base):
+    __tablename__ = "service_types"
+    id: str                      # e.g., "ocr-paddle", "ocr-tesseract"
+    display_name: str            # e.g., "Vietnamese Text OCR"
+    description: str | None      # Dev description
+    status: str                  # ServiceTypeStatus (PENDING/APPROVED/DISABLED/REJECTED)
+    access_key: str | None       # Unique, for File Proxy auth (generated on approve)
     allowed_methods: str         # JSON array ["text_raw"]
     allowed_tiers: str           # JSON array [0]
-    enabled: bool
-    created_at: datetime
+    engine_info: str | None      # JSON {name, version, capabilities}
+    dev_contact: str | None      # Dev email/contact
+    max_instances: int           # 0 = unlimited
+    registered_at: datetime
+    approved_at: datetime | None
+    approved_by: str | None
+    rejected_at: datetime | None
+    rejection_reason: str | None
+
+class ServiceInstance(Base):
+    __tablename__ = "service_instances"
+    id: str                      # e.g., "ocr-paddle-abc123def456"
+    service_type_id: str         # FK -> service_types
+    status: str                  # ServiceInstanceStatus
+    registered_at: datetime
+    last_heartbeat_at: datetime
+    current_job_id: str | None
+    instance_metadata: str | None # JSON {hostname, engine_version, ...}
 
 class Heartbeat(Base):
     __tablename__ = "heartbeats"
     id: int                      # Auto-increment
-    service_id: str              # FK -> services
-    status: str                  # idle, processing, uploading, error
+    instance_id: str             # FK -> service_instances (NOT service_id)
+    status: str                  # idle, processing, error
     current_job_id: str | None
     files_completed: int
     files_total: int
     error_count: int
     received_at: datetime
+
+# DEPRECATED: Legacy Service model (kept for migration compatibility)
+class Service(Base):
+    __tablename__ = "services"
+    # ... (legacy, use ServiceType + ServiceInstance instead)
 ```
 
-**Changes from v2.0:**
-- `File.purged_at` removed — no hard delete, files persist in MinIO indefinitely
-- Soft delete (`deleted_at`) still supported for hiding from user, but file remains in storage
+**Key Changes from Planning v2.1:**
+- `User.is_admin` added for admin role management
+- `Session.token` is a separate field (Session.id is UUID, not the token)
+- `Request.expires_at` added for expiry tracking
+- `Request.retention_hours` defaults to 168 (7 days), not 24
+- `Job.output_format` removed (lives on Request only)
+- `Service` replaced by `ServiceType` + `ServiceInstance` two-level model
+- `Heartbeat.instance_id` references `ServiceInstance` (not `service_id`)
 
 ---
 
 ## 6. Docker Compose Services
 
-> Tất cả services initialized bằng docker compose.
-> Backend tự khởi tạo DB, NATS streams, MinIO buckets khi startup via lifespan events.
-> Không cần external scripts.
+> Root docker-compose.yml contains **only infrastructure + backend**.
+> Workers and frontend are deployed separately.
+> Backend auto-initializes DB, NATS streams, MinIO buckets via lifespan events.
 
 ```yaml
 # docker-compose.yml
 
 services:
-  # === EDGE LAYER ===
-  frontend:
-    build: ./frontend
+  # === INFRASTRUCTURE ===
+  minio:
+    image: minio/minio:latest
+    container_name: ocr-minio
     ports:
-      - "3000:3000"
-    depends_on:
-      backend:
-        condition: service_healthy
+      - "${MINIO_PORT}:9000"           # S3 API
+      - "${MINIO_CONSOLE_PORT}:9001"   # Web Console
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./data/minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+    networks:
+      - ocr-network
 
-  # === EDGE + ORCHESTRATION (combined in Phase 1) ===
+  nats:
+    image: nats:latest
+    container_name: ocr-nats
+    ports:
+      - "${NATS_PORT}:4222"            # Client connections
+      - "${NATS_MONITOR_PORT}:8222"    # Monitoring
+    command: ["--jetstream", "--store_dir=/data", "-m", "8222"]
+    volumes:
+      - ./data/nats:/data
+    networks:
+      - ocr-network
+
+  # === BACKEND (Edge + Orchestration) ===
   backend:
     build: ./backend
+    container_name: ocr-backend
     ports:
-      - "8080:8080"
+      - "${BACKEND_PORT}:8000"         # API on port 8000
     environment:
-      # Storage credentials (Edge layer — MinIO access)
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin
-      - MINIO_BUCKET_UPLOADS=uploads
-      - MINIO_BUCKET_RESULTS=results
-      - MINIO_BUCKET_DELETED=deleted
-      # Queue (Orchestration layer)
-      - NATS_URL=nats://nats:4222
-      - NATS_STREAM_NAME=OCR_JOBS
-      - NATS_DLQ_STREAM_NAME=OCR_DLQ
-      # Database (Orchestration layer)
-      - DATABASE_URL=sqlite:///./data/ocr_platform.db
-      # Service registry (seed on startup)
-      - SEED_SERVICES=worker-ocr-text-tier0:sk_local_text_tier0:text_raw:0
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}         # ocr-minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_BUCKET_UPLOADS=${MINIO_BUCKET_UPLOADS}
+      - MINIO_BUCKET_RESULTS=${MINIO_BUCKET_RESULTS}
+      - MINIO_BUCKET_DELETED=${MINIO_BUCKET_DELETED}
+      - NATS_URL=${NATS_URL}                     # nats://ocr-nats:4222
+      - DATABASE_URL=${DATABASE_URL}              # sqlite:///./data/ocr_fresh.db
+      - SEED_SERVICES=${SEED_SERVICES}            # DEV: seed service types
     depends_on:
       minio:
         condition: service_healthy
@@ -557,98 +642,107 @@ services:
     volumes:
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    networks:
+      - ocr-network
 
-  minio:
-    image: minio/minio
-    ports:
-      - "9000:9000"       # S3 API (Edge layer storage)
-      - "9001:9001"       # Web Console (debug)
+networks:
+  ocr-network:
+    name: ocr-network
+    driver: bridge
+```
+
+**Worker Docker Compose (separate files):**
+
+```yaml
+# 03_worker/deploy/tesseract-cpu/docker-compose.yml (example)
+services:
+  ocr-tesseract:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.cpu
+    env_file: ../../.env            # Loads shared env vars
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
-    volumes:
-      - ./data/minio:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      - WORKER_SERVICE_TYPE=ocr-tesseract
+      - WORKER_ACCESS_KEY=sk_local_tesseract   # DEV: pre-seeded key
+    networks:
+      - ocr-network
 
-  # === ORCHESTRATION LAYER (infrastructure) ===
-  nats:
-    image: nats:latest
-    ports:
-      - "4222:4222"       # Client connections
-      - "8222:8222"       # Monitoring
-    command: ["--jetstream", "--store_dir=/data"]
-    volumes:
-      - ./data/nats:/data
-
-  # === PROCESSING LAYER ===
-  worker-ocr-text-tier0:
-    build: ./worker
+# 03_worker/deploy/paddle-text/docker-compose.yml (example)
+services:
+  ocr-paddle:
+    build:
+      context: ../../
+      dockerfile: Dockerfile        # GPU Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]    # Nvidia GPU
+    env_file: ../../.env
     environment:
-      # Worker identity
-      - WORKER_SERVICE_ID=worker-ocr-text-tier0
-      - WORKER_ACCESS_KEY=sk_local_text_tier0
-      - WORKER_FILTER_SUBJECT=ocr.text_raw.tier0
-      # Connections (NO MINIO_* variables!)
-      - NATS_URL=nats://nats:4222
-      - FILE_PROXY_URL=http://backend:8080/internal/file-proxy
-      - ORCHESTRATOR_URL=http://backend:8080/internal
-      # Config
-      - HEARTBEAT_INTERVAL_MS=30000
-      - JOB_TIMEOUT_SECONDS=300
-    depends_on:
-      backend:
-        condition: service_healthy
-      nats:
-        condition: service_started
-    # Graceful shutdown: allow worker to finish current job
-    stop_grace_period: 60s
+      - WORKER_SERVICE_TYPE=ocr-paddle
+      - WORKER_ACCESS_KEY=sk_local_paddle
+    networks:
+      - ocr-network
 ```
 
 **Startup Sequence:**
 ```
-1. minio starts → healthcheck passes (S3 ready)
+1. minio starts -> healthcheck passes (S3 ready)
 2. nats starts
-3. backend starts → waits for minio healthy + nats started
-   → lifespan startup:
+3. backend starts -> waits for minio healthy + nats started
+   -> lifespan startup:
      a. Connect SQLite, enable WAL mode, create tables
      b. Connect MinIO, ensure buckets exist (uploads, results, deleted)
      c. Connect NATS, ensure streams exist (OCR_JOBS, OCR_DLQ)
-     d. Seed services from SEED_SERVICES env var
-   → healthcheck passes (/health returns 200)
-4. frontend starts → waits for backend healthy
-5. worker starts → waits for backend healthy + nats started
-   → connects NATS, subscribes to filter subject
-   → starts heartbeat loop
-   → starts job polling loop
+     d. Seed service types from SEED_SERVICES env var (dev convenience)
+   -> healthcheck passes (/health returns 200)
+4. Workers start (separately) -> connect to ocr-network
+   -> POST /internal/register (self-registration)
+   -> If type APPROVED: get access_key, start processing
+   -> If type PENDING: wait for admin approval
+   -> Start heartbeat loop
+   -> Start job polling loop
 ```
+
+**Makefile Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `make up` | Start infrastructure + backend |
+| `make down` | Stop infrastructure + backend |
+| `make build` | Build backend image |
+| `make logs` | Tail backend logs |
+| `make dev` | Development mode |
+| `make worker-paddle` | Start PaddleOCR worker (GPU) |
+| `make worker-tesseract` | Start Tesseract worker (CPU) |
+| `make workers` | Start all workers |
+| `make workers-down` | Stop all workers |
+| `make create-admin EMAIL=... PASS=...` | Create admin user |
+| `make promote EMAIL=...` | Promote user to admin |
+| `make demote EMAIL=...` | Demote admin to user |
+| `make all` | Start everything |
+| `make all-down` | Stop everything |
 
 ---
 
-## 7. Key Design Decisions (Aligned with SA v3.1)
+## 7. Key Design Decisions (Aligned with SA v3.1 + Implementation)
 
 | Decision | Rationale |
 |----------|-----------|
 | **MinIO in Edge Layer** | SA v3.1: "Edge layer lưu trữ file (object storage)" |
-| **No hard delete** | Files persist in MinIO. Soft delete only (set `deleted_at`). Đơn giản cho Phase 1, user có thể download bất kỳ lúc nào. |
-| **Docker compose init** | Fresh build — backend self-initializes via lifespan events. Không cần external scripts. |
-| **UI dùng "Batch"** | Tự nhiên cho user. Backend giữ `requests` table, frontend mapping. |
-| **Result Viewer split-panel** | Side-by-side comparison (source ↔ extracted text) thiết yếu cho QA. |
-| **Presigned URLs cho download** | MinIO generate presigned URL → client download trực tiếp từ MinIO (Edge). Giảm load backend. |
-| **Retry at Orchestrator** | Worker only reports errors; Orchestrator decides retry/fail/DLQ |
-| **File Proxy in Backend** | Phase 1: module in Backend. Phase 2: separate service if needed |
-| **Heartbeat table** | Track worker health, detect dead/stalled workers |
-| **Full State Machine** | SUBMITTED → VALIDATING → QUEUED → PROCESSING → terminal states |
-| **Graceful shutdown** | Worker handles SIGTERM, finishes current job before exit |
-| **Health endpoint** | Backend /health checks DB + NATS + MinIO. Docker depends_on uses healthcheck. |
+| **No hard delete** | Files persist in MinIO. Soft delete only (set `deleted_at`). |
+| **Docker compose split** | Root compose = infra + backend. Workers = separate compose per engine. |
+| **ServiceType + ServiceInstance** | Two-level model: admin manages types, system manages instances. |
+| **Worker self-registration** | Workers POST /internal/register on startup. Admin approves types. |
+| **Multi-engine support** | PaddleOCR (GPU) + Tesseract (CPU) with separate deploy configs. |
+| **Internal API under /api/v1** | All routes (public + internal) share same `/api/v1` prefix. |
+| **Retry at Orchestrator** | Worker only reports errors; Orchestrator decides retry/fail/DLQ. |
+| **Heartbeat via instance_id** | Heartbeat tracks individual instances, not service types. |
+| **Admin CLI tools** | Makefile targets: create-admin, promote, demote via cli.py. |
+| **Container name networking** | Uses `ocr-minio`, `ocr-nats`, `ocr-backend` for cross-compose DNS. |
+| **Shared .env** | Single `.env` file loaded by root compose and all worker compose files. |
 
 ---
 
@@ -661,23 +755,30 @@ services:
 │                                                              │
 │   api/endpoints/* (Edge Layer)                               │
 │         │                                                    │
-│         └──▶ modules/* (Orchestration Layer)                │
+│         └──> modules/* (Orchestration Layer)                 │
 │                   │                                          │
-│                   ├──▶ infrastructure/database/              │
-│                   ├──▶ infrastructure/storage/ (→ Edge MinIO)│
-│                   └──▶ infrastructure/queue/                 │
+│                   ├──> infrastructure/database/               │
+│                   ├──> infrastructure/storage/ (-> Edge MinIO)│
+│                   └──> infrastructure/queue/                  │
 │                                                              │
-│   api/internal/* (Worker ↔ Orchestration)                   │
+│   api/endpoints/admin/* (Admin - requires is_admin)          │
 │         │                                                    │
-│         └──▶ modules/file_proxy/                            │
-│                   │                                          │
-│                   └──▶ infrastructure/storage/ (→ Edge MinIO)│
+│         └──> infrastructure/database/repositories/           │
+│              (service_type, service_instance)                 │
 │                                                              │
-│   core/lifespan.py (Application Lifecycle)                  │
+│   api/internal/* (Worker <-> Orchestration)                  │
 │         │                                                    │
-│         ├──▶ infrastructure/database/   (create tables)     │
-│         ├──▶ infrastructure/storage/    (ensure buckets)    │
-│         └──▶ infrastructure/queue/      (ensure streams)    │
+│         ├──> modules/file_proxy/                             │
+│         │         └──> infrastructure/storage/ (-> Edge MinIO)│
+│         │                                                    │
+│         └──> infrastructure/database/repositories/           │
+│              (service_type, service_instance for register)    │
+│                                                              │
+│   core/lifespan.py (Application Lifecycle)                   │
+│         │                                                    │
+│         ├──> infrastructure/database/   (create tables)      │
+│         ├──> infrastructure/storage/    (ensure buckets)     │
+│         └──> infrastructure/queue/      (ensure streams)     │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 
@@ -687,18 +788,19 @@ services:
 │                                                              │
 │   main.py                                                    │
 │         │                                                    │
-│         ├──▶ core/shutdown.py  (signal handlers)            │
+│         ├──> core/shutdown.py  (signal handlers)             │
 │         │                                                    │
-│         └──▶ core/worker.py    (main loop)                  │
+│         └──> core/worker.py    (main loop)                   │
 │                   │                                          │
-│                   ├──▶ clients/queue_client.py (→ NATS)     │
-│                   ├──▶ clients/file_proxy_client.py (→ Backend)│
-│                   ├──▶ clients/orchestrator_client.py (→ Backend)│
-│                   ├──▶ clients/heartbeat_client.py (→ Backend)│
+│                   ├──> clients/queue_client.py (-> NATS)     │
+│                   ├──> clients/file_proxy_client.py (-> Backend)│
+│                   ├──> clients/orchestrator_client.py (-> Backend)│
+│                   ├──> clients/heartbeat_client.py (-> Backend)│
 │                   │                                          │
-│                   └──▶ core/processor.py                    │
+│                   └──> core/processor.py                     │
 │                             │                                │
-│                             └──▶ handlers/text_raw.py       │
+│                             ├──> engines/paddle_text/handler.py│
+│                             └──> engines/tesseract/handler.py │
 │                                                              │
 │   NOTE: Worker has NO storage imports.                       │
 │         All file ops go through File Proxy HTTP client.      │
@@ -710,7 +812,7 @@ services:
 
 ## 9. File Storage & Download Strategy (No Hard Delete)
 
-**Nguyên tắc:** Files lưu vĩnh viễn trong MinIO (Edge layer). User có thể download bất kỳ lúc nào. Soft delete chỉ ẩn file khỏi UI, không xoá khỏi storage.
+**Unchanged from v2.1** -- Files persist in MinIO. Soft delete only. Presigned URLs for download.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -718,108 +820,72 @@ services:
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │   Upload                                                                 │
-│   Client ──POST /upload──▶ API (Edge) ──S3 Put──▶ MinIO uploads bucket  │
+│   Client --POST /upload--> API (Edge) --S3 Put--> MinIO uploads bucket  │
 │                                                                          │
 │   Processing                                                             │
-│   Worker ──File Proxy──▶ MinIO uploads bucket (download source)         │
-│   Worker ──File Proxy──▶ MinIO results bucket (upload result)           │
+│   Worker --File Proxy--> MinIO uploads bucket (download source)         │
+│   Worker --File Proxy--> MinIO results bucket (upload result)           │
 │                                                                          │
-│   View Result                                                            │
-│   Client ──GET /jobs/:id/result──▶ API reads text from MinIO results    │
-│   (text content returned inline for Result Viewer display)               │
-│                                                                          │
-│   Download Original                                                      │
-│   Client ──GET /files/:id/original-url──▶ API returns presigned URL     │
-│   Client ──GET presigned URL──▶ MinIO uploads bucket (direct download)  │
-│                                                                          │
-│   Download Result                                                        │
-│   Client ──GET /files/:id/result-url──▶ API returns presigned URL       │
-│   Client ──GET presigned URL──▶ MinIO results bucket (direct download)  │
+│   Download (via presigned URL)                                           │
+│   Client --GET /files/:id/original-url--> presigned URL --> MinIO       │
+│   Client --GET /files/:id/result-url--> presigned URL --> MinIO         │
 │                                                                          │
 │   Soft Delete (user action)                                              │
-│   Client ──DELETE /requests/:id──▶ API sets deleted_at in DB            │
-│   File remains in MinIO. Hidden from UI queries. Can be recovered.      │
-│                                                                          │
-│   Recovery                                                               │
-│   Client ──POST /requests/:id/recover──▶ API clears deleted_at          │
-│   File reappears in UI.                                                  │
-│                                                                          │
-│   ★ No hard delete. No cleanup job. No purge.                           │
-│   ★ Admin can manually clean MinIO via console (port 9001) if needed.   │
+│   Client --DELETE--> API sets deleted_at in DB                           │
+│   File remains in MinIO, hidden from UI.                                │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
-```
-
-**Download Flow (kết hợp với Result Viewer UI):**
-
-```
-Result Viewer Page
-    │
-    ├── [View text inline]
-    │   GET /api/v1/jobs/:id/result
-    │   → Backend reads result file from MinIO results bucket
-    │   → Returns text content as JSON { text: "...", lines: 22 }
-    │   → ExtractedText component renders with line numbers
-    │
-    ├── [Click TXT button]
-    │   GET /api/v1/files/:id/download?format=txt
-    │   → Backend generates presigned URL for result file in MinIO
-    │   → Returns URL, frontend triggers browser download
-    │
-    ├── [Click JSON button]
-    │   GET /api/v1/files/:id/download?format=json
-    │   → Backend wraps result in JSON structure:
-    │     { filename, method, tier, processing_time, text, metadata }
-    │   → Returns as downloadable JSON file
-    │
-    └── [Click Copy button]
-        → Frontend copies ExtractedText content to clipboard
-        → No backend call needed
 ```
 
 ---
 
 ## 10. Phase 1 Implementation Scope
 
-### Must Have (Phase 1)
+### Implemented
 - [x] Layer separation: Edge (MinIO) / Orchestration / Processing
-- [ ] Docker compose full stack with healthchecks
-- [ ] Backend lifespan: auto-init DB + NATS streams + MinIO buckets + seed services
-- [ ] All backend modules: auth, upload, job, file_proxy
-- [ ] Health endpoint: GET /health
-- [ ] Retry orchestrator (retry at Orchestration, not Worker)
-- [ ] Full state machine: SUBMITTED → VALIDATING → QUEUED → PROCESSING → terminal states
-- [ ] Dead Letter Queue (OCR_DLQ stream)
-- [ ] Heartbeat protocol (worker → orchestrator)
-- [ ] Worker with text_raw handler + graceful shutdown
-- [ ] Result storage in MinIO + presigned URL download
-- [ ] Frontend: Dashboard, Batches, Upload, Batch Detail, Result Viewer
-- [ ] Result Viewer: split-panel, file navigation, TXT/JSON download, Copy
+- [x] Docker compose: infra + backend (workers separate)
+- [x] Backend lifespan: auto-init DB + NATS + MinIO + seed services
+- [x] All backend modules: auth, upload, job, file_proxy
+- [x] Health endpoint: GET /health
+- [x] Full state machine: SUBMITTED -> VALIDATING -> QUEUED -> PROCESSING -> terminal
+- [x] Retry orchestrator (retry at Orchestration, not Worker)
+- [x] Dead Letter Queue (OCR_DLQ stream)
+- [x] Heartbeat protocol (instance -> orchestrator)
+- [x] Multi-engine worker: PaddleOCR (GPU) + Tesseract (CPU)
+- [x] Worker self-registration (POST /internal/register)
+- [x] Admin panel: Service Type management (approve/reject/disable)
+- [x] Admin CLI: create-admin, promote, demote
+- [x] Frontend: Dashboard, Batches, Upload, Batch Detail, Result Viewer
+- [x] Result Viewer: split-panel, file navigation, TXT/JSON download, Copy
+- [x] ServiceType + ServiceInstance two-level model
+- [x] Sidebar navigation with admin-only section
 
 ### Not in Scope (Phase 1)
-- Hard delete / cleanup job — files persist in MinIO
-- External init scripts — backend self-initializes
-- Alembic migrations — fresh build, tables created on startup
+- Hard delete / cleanup job
+- External init scripts (backend self-initializes)
+- Alembic migrations (fresh build)
 - Billing module
 - Notification system (SSE/WebSocket)
-- Batch pull pattern for GPU workers
-- Dynamic service registration (Admin dashboard)
 - OAuth (Google, GitHub)
 - Separate File Proxy service
 
 ---
 
-*Changelog v2.0 → v2.1:*
-- *Removed `scripts/` directory — docker compose + lifespan handles all initialization*
-- *Removed `alembic/` — fresh build, no migration needed*
-- *Removed `infrastructure/cleanup/` — no hard delete, files persist in MinIO*
-- *Removed `File.purged_at` column — no hard purge*
-- *Added `core/lifespan.py` — application startup/shutdown lifecycle*
-- *Added `core/shutdown.py` to worker — graceful SIGTERM handling*
-- *Added `health.py` endpoint — Docker healthcheck support*
-- *Added `stop_grace_period: 60s` to worker in docker-compose*
-- *Added healthchecks to docker-compose services*
-- *Added `SEED_SERVICES` env var for service registration on startup*
-- *Restructured frontend based on sample UI: Batch terminology, Result Viewer split-panel, file navigation, download options*
-- *Added Section 9: File Storage & Download Strategy (No Hard Delete)*
-- *Docker compose comment changed to `=== EDGE + ORCHESTRATION (combined in Phase 1) ===`*
+*Changelog v2.1 -> v3.0:*
+- *Directories renamed: `frontend/` -> `01_frontend/`, `backend/` -> `02_backend/`, `worker/` -> `03_worker/`, `docs/` -> `04_docs/`*
+- *Added `00_test/` directory for test suites*
+- *Backend port changed: 8080 -> 8000*
+- *Database file: `ocr_platform.db` -> `ocr_fresh.db`*
+- *Internal API path: `/internal/*` -> `/api/v1/internal/*`*
+- *`Service` model replaced by `ServiceType` + `ServiceInstance` two-level model*
+- *Worker `handlers/` replaced by `engines/` with multi-engine support (PaddleOCR + Tesseract)*
+- *Worker deploy model: each engine has own `docker-compose.yml` in `deploy/`*
+- *Frontend/workers removed from root docker-compose.yml*
+- *Container names prefixed: `ocr-minio`, `ocr-nats`, `ocr-backend`*
+- *Added admin panel: `AdminServicesPage.tsx`, admin API endpoints*
+- *Added `User.is_admin`, `Session.token`, `Request.expires_at` fields*
+- *Removed `Job.output_format` (lives on Request)*
+- *Added worker self-registration (POST /internal/register + /deregister)*
+- *Added `cli.py` + Makefile admin commands (create-admin, promote, demote)*
+- *Network: named `ocr-network` with bridge driver*
+- *Shared `.env` file loaded by all compose files*

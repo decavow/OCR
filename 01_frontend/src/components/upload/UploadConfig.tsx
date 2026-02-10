@@ -13,6 +13,7 @@ interface UploadConfigProps {
   config: Config
   onChange: (config: Config) => void
   fileCount: number
+  onServicesLoaded?: (available: boolean) => void
 }
 
 const RETENTION_LABELS: Record<number, string> = {
@@ -46,21 +47,27 @@ function buildOptions(services: AvailableService[]) {
   return { methodOpts, tierOpts }
 }
 
-export default function UploadConfig({ config, onChange, fileCount }: UploadConfigProps) {
+export default function UploadConfig({ config, onChange, fileCount, onServicesLoaded }: UploadConfigProps) {
   const [services, setServices] = useState<AvailableService[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     getAvailableServices()
-      .then((res) => setServices(res.items))
-      .catch(() => setServices([]))
+      .then((res) => {
+        setServices(res.items)
+        onServicesLoaded?.(res.items.length > 0)
+      })
+      .catch(() => {
+        setServices([])
+        onServicesLoaded?.(false)
+      })
       .finally(() => setLoading(false))
   }, [])
 
-  // Dynamic options from API, fallback to static config
+  // Dynamic options from API — only show approved services
   const { methodOpts, tierOpts } = services.length > 0
     ? buildOptions(services)
-    : { methodOpts: [...METHOD_OPTIONS], tierOpts: [...TIER_OPTIONS] }
+    : { methodOpts: [], tierOpts: [] }
 
   const ratePerPage = getRatePerPage(config.method, config.tier)
   const estimatedPrice = fileCount * ratePerPage
@@ -81,7 +88,7 @@ export default function UploadConfig({ config, onChange, fileCount }: UploadConf
 
         {noServices && (
           <div className="config-warning">
-            No services available from server. Showing default options.
+            No OCR services are currently available. Please contact admin.
           </div>
         )}
 
@@ -91,9 +98,10 @@ export default function UploadConfig({ config, onChange, fileCount }: UploadConf
             id="ocr-method"
             value={config.method}
             onChange={(e) => onChange({ ...config, method: e.target.value })}
-            disabled={loading}
+            disabled={loading || noServices}
           >
             {loading && <option>Loading...</option>}
+            {noServices && <option value="">No services available</option>}
             {methodOpts.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
@@ -111,9 +119,10 @@ export default function UploadConfig({ config, onChange, fileCount }: UploadConf
             id="ocr-tier"
             value={config.tier}
             onChange={(e) => onChange({ ...config, tier: parseInt(e.target.value, 10) })}
-            disabled={loading}
+            disabled={loading || noServices}
           >
             {loading && <option>Loading...</option>}
+            {noServices && <option value="">No services available</option>}
             {tierOpts.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
