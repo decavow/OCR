@@ -11,9 +11,11 @@ import ResultViewerPage from './pages/ResultViewerPage'
 import UploadPage from './pages/UploadPage'
 import SettingsPage from './pages/SettingsPage'
 import NotFoundPage from './pages/NotFoundPage'
+import AdminServicesPage from './pages/AdminServicesPage'
 
 // Components
 import ProtectedRoute from './components/auth/ProtectedRoute'
+import AdminRoute from './components/auth/AdminRoute'
 import MainLayout from './components/layout/MainLayout'
 
 function App() {
@@ -35,6 +37,11 @@ function App() {
               <Route path="/batches/:batchId/files/:fileId" element={<ResultViewerPage />} />
               <Route path="/upload" element={<UploadPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+
+              {/* Admin routes */}
+              <Route element={<AdminRoute />}>
+                <Route path="/admin/services" element={<AdminServicesPage />} />
+              </Route>
             </Route>
           </Route>
 

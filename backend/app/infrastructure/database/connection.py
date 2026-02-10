@@ -55,10 +55,34 @@ def get_db_context() -> Generator[Session, None, None]:
         db.close()
 
 
+def _run_migrations() -> None:
+    """Run lightweight schema migrations for columns added after initial release.
+
+    SQLAlchemy's create_all() only creates new tables; it does not add columns
+    to existing tables.  We handle that here with ALTER TABLE statements,
+    ignoring errors when the column already exists (SQLite raises
+    OperationalError with 'duplicate column name').
+    """
+    from sqlalchemy import text
+
+    migrations = [
+        "ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0",
+    ]
+
+    with engine.connect() as conn:
+        for stmt in migrations:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+
+
 def init_db() -> None:
-    """Initialize database - create all tables."""
+    """Initialize database - create all tables and run migrations."""
     from app.infrastructure.database.models import Base
     Base.metadata.create_all(bind=engine)
+    _run_migrations()
 
 
 def drop_db() -> None:

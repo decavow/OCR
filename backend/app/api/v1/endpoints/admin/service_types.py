@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_admin_user
+from app.infrastructure.database.models import User, ServiceTypeStatus
 from app.infrastructure.database.repositories import ServiceTypeRepository
-from app.infrastructure.database.models import ServiceTypeStatus
 
 router = APIRouter()
 
@@ -59,6 +59,7 @@ class RejectRequest(BaseModel):
 async def list_service_types(
     status: Optional[str] = Query(None, description="Filter by status"),
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """
     List all service types.
@@ -83,6 +84,7 @@ async def list_service_types(
 async def get_service_type(
     type_id: str,
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """Get service type details."""
     service_type_repo = ServiceTypeRepository(db)
@@ -98,6 +100,7 @@ async def get_service_type(
 async def approve_service_type(
     type_id: str,
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """
     Approve a service type.
@@ -122,7 +125,7 @@ async def approve_service_type(
         )
 
     try:
-        service_type = service_type_repo.approve(service_type, approved_by="admin")
+        service_type = service_type_repo.approve(service_type, approved_by=admin.email)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -134,6 +137,7 @@ async def reject_service_type(
     type_id: str,
     data: RejectRequest,
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """
     Reject a service type (terminal state).
@@ -165,6 +169,7 @@ async def reject_service_type(
 async def disable_service_type(
     type_id: str,
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """
     Temporarily disable a service type.
@@ -197,6 +202,7 @@ async def disable_service_type(
 async def enable_service_type(
     type_id: str,
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """
     Re-enable a disabled service type.
@@ -228,6 +234,7 @@ async def enable_service_type(
 async def delete_service_type(
     type_id: str,
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """
     Delete a service type and all its instances.

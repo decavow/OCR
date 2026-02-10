@@ -29,11 +29,27 @@ export default function Sidebar() {
         <Link to="/batches" className={location.pathname.startsWith('/batches') ? 'active' : ''}>
           Batches
         </Link>
+
+        {user?.is_admin && (
+          <>
+            <div className="sidebar-divider" />
+            <span className="sidebar-section-label">Admin</span>
+            <Link
+              to="/admin/services"
+              className={location.pathname.startsWith('/admin/services') ? 'active' : ''}
+            >
+              Service Management
+            </Link>
+          </>
+        )}
       </nav>
 
       <div className="sidebar-footer">
         <div className="user-info">
-          <span>{user?.email}</span>
+          <div className="user-info-text">
+            <span>{user?.email}</span>
+            {user?.is_admin && <span className="admin-badge">Admin</span>}
+          </div>
           <button onClick={handleLogout}>Logout</button>
         </div>
       </div>

@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_admin_user
+from app.infrastructure.database.models import User
 from app.infrastructure.database.repositories import ServiceInstanceRepository
 
 router = APIRouter()
@@ -45,6 +46,7 @@ async def list_service_instances(
     type: Optional[str] = Query(None, alias="type", description="Filter by service type ID"),
     status: Optional[str] = Query(None, description="Filter by status"),
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """
     List all service instances.
@@ -71,6 +73,7 @@ async def list_service_instances(
 async def get_service_instance(
     instance_id: str,
     db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ):
     """Get service instance details."""
     instance_repo = ServiceInstanceRepository(db)

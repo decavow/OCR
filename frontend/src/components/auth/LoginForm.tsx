@@ -16,8 +16,8 @@ export default function LoginForm() {
     setLoading(true)
 
     try {
-      await login(email, password)
-      navigate('/dashboard')
+      const user = await login(email, password)
+      navigate(user.is_admin ? '/admin/services' : '/dashboard')
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'response' in err) {
         const axiosErr = err as { response?: { data?: { detail?: string } } }

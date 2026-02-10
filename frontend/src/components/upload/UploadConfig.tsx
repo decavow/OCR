@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { UploadConfig as Config } from '../../types'
 import {
   OUTPUT_FORMATS,
@@ -6,6 +7,7 @@ import {
   TIER_OPTIONS,
   PRICING,
 } from '../../config'
+import { getAvailableServices, AvailableService } from '../../api/services'
 
 interface UploadConfigProps {
   config: Config
@@ -28,12 +30,45 @@ function formatVND(amount: number): string {
   return amount.toLocaleString('vi-VN') + ' VND'
 }
 
+// Build method+tier options from available services
+function buildOptions(services: AvailableService[]) {
+  const methods = new Set<string>()
+  const tiers = new Set<number>()
+
+  for (const svc of services) {
+    for (const m of svc.allowed_methods) methods.add(m)
+    for (const t of svc.allowed_tiers) tiers.add(t)
+  }
+
+  const methodOpts = METHOD_OPTIONS.filter((m) => methods.has(m.value))
+  const tierOpts = TIER_OPTIONS.filter((t) => tiers.has(t.value))
+
+  return { methodOpts, tierOpts }
+}
+
 export default function UploadConfig({ config, onChange, fileCount }: UploadConfigProps) {
+  const [services, setServices] = useState<AvailableService[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    getAvailableServices()
+      .then((res) => setServices(res.items))
+      .catch(() => setServices([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  // Dynamic options from API, fallback to static config
+  const { methodOpts, tierOpts } = services.length > 0
+    ? buildOptions(services)
+    : { methodOpts: [...METHOD_OPTIONS], tierOpts: [...TIER_OPTIONS] }
+
   const ratePerPage = getRatePerPage(config.method, config.tier)
   const estimatedPrice = fileCount * ratePerPage
 
-  const currentMethod = METHOD_OPTIONS.find((m) => m.value === config.method)
-  const currentTier = TIER_OPTIONS.find((t) => t.value === config.tier)
+  const currentMethod = methodOpts.find((m) => m.value === config.method)
+  const currentTier = tierOpts.find((t) => t.value === config.tier)
+
+  const noServices = !loading && services.length === 0
 
   return (
     <div className="upload-config-panel">
@@ -44,14 +79,22 @@ export default function UploadConfig({ config, onChange, fileCount }: UploadConf
           Configuration
         </h3>
 
+        {noServices && (
+          <div className="config-warning">
+            No services available from server. Showing default options.
+          </div>
+        )}
+
         <div className="config-group">
           <label htmlFor="ocr-method">OCR Service Engine</label>
           <select
             id="ocr-method"
             value={config.method}
             onChange={(e) => onChange({ ...config, method: e.target.value })}
+            disabled={loading}
           >
-            {METHOD_OPTIONS.map((opt) => (
+            {loading && <option>Loading...</option>}
+            {methodOpts.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
@@ -68,8 +111,10 @@ export default function UploadConfig({ config, onChange, fileCount }: UploadConf
             id="ocr-tier"
             value={config.tier}
             onChange={(e) => onChange({ ...config, tier: parseInt(e.target.value, 10) })}
+            disabled={loading}
           >
-            {TIER_OPTIONS.map((opt) => (
+            {loading && <option>Loading...</option>}
+            {tierOpts.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>

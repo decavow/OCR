@@ -1,7 +1,7 @@
 # Application startup/shutdown lifecycle
 
 from app.core.logging import setup_logging, get_logger
-from app.infrastructure.database.connection import engine, SessionLocal
+from app.infrastructure.database.connection import engine, SessionLocal, _run_migrations
 from app.infrastructure.database.models import Base, ServiceTypeStatus
 from app.infrastructure.database.repositories import ServiceTypeRepository
 from app.infrastructure.storage.minio_client import MinIOStorageService
@@ -31,6 +31,7 @@ async def startup() -> None:
     # Database
     logger.info("Initializing database...")
     Base.metadata.create_all(bind=engine, checkfirst=True)
+    _run_migrations()
     logger.info("Database initialized")
 
     # Storage

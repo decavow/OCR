@@ -2,6 +2,7 @@
 
 .PHONY: up down build logs clean dev health
 .PHONY: worker-paddle worker-tesseract workers workers-down
+.PHONY: create-admin promote demote
 
 # === Core (Infrastructure + Backend) ===
 
@@ -43,6 +44,21 @@ workers: worker-paddle worker-tesseract
 workers-down:
 	docker-compose -f worker/deploy/paddle-text/docker-compose.yml down
 	docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml down
+
+# === Admin ===
+# Usage:
+#   make create-admin EMAIL=admin@example.com PASS=secret123
+#   make promote EMAIL=user@example.com
+#   make demote EMAIL=user@example.com
+
+create-admin:
+	docker-compose exec backend python -m app.cli create-admin $(EMAIL) $(PASS)
+
+promote:
+	docker-compose exec backend python -m app.cli promote $(EMAIL)
+
+demote:
+	docker-compose exec backend python -m app.cli demote $(EMAIL)
 
 # === All ===
 
