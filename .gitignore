@@ -4,12 +4,16 @@
 # === Python ===
 __pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
 *.egg
 dist/
 build/
 .venv/
 venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 
 # === Node.js ===
 node_modules/
@@ -19,6 +23,10 @@ frontend/dist/
 
 # === Data (runtime volumes) ===
 data/
+
+# === Database ===
+*.db
+*.sqlite3
 
 # === IDE ===
 .vscode/
@@ -38,3 +46,4 @@ nul
 collection_tool.py
 ocr.md
 ocr_structure.md
+frontend/stitch_ocr_dashboard_upload
