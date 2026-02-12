@@ -1,14 +1,22 @@
 import { ButtonHTMLAttributes, ReactNode } from 'react'
+import { Button as ShadcnButton } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'danger'
   children: ReactNode
 }
 
-export default function Button({ variant = 'primary', children, ...props }: ButtonProps) {
+const variantMap = {
+  primary: 'default',
+  secondary: 'secondary',
+  danger: 'destructive',
+} as const
+
+export default function Button({ variant = 'primary', children, className, ...props }: ButtonProps) {
   return (
-    <button className={`btn btn-${variant}`} {...props}>
+    <ShadcnButton variant={variantMap[variant]} className={cn(className)} {...props}>
       {children}
-    </button>
+    </ShadcnButton>
   )
 }

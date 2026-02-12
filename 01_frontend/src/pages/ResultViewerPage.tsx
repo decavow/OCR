@@ -1,5 +1,3 @@
-// Split-panel result viewer (from sample UI)
-
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useKeyboard } from '../hooks/useKeyboard'
@@ -7,6 +5,10 @@ import { FileInfo, JobResult, Job } from '../types'
 import { getBatch } from '../api/batches'
 import { getJobResult } from '../api/jobs'
 import { getFile, getOriginalUrl } from '../api/files'
+import { Button as ShadcnButton } from '@/components/ui/button'
+import { ChevronLeft, ChevronRight, ArrowLeft, Copy } from 'lucide-react'
+import Loading from '../components/common/Loading'
+import ErrorMessage from '../components/common/ErrorMessage'
 
 export default function ResultViewerPage() {
   const { batchId, fileId } = useParams<{ batchId: string; fileId: string }>()
@@ -20,7 +22,6 @@ export default function ResultViewerPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Fetch batch to get all jobs
   useEffect(() => {
     const fetchBatch = async () => {
       if (!batchId) return
@@ -28,8 +29,6 @@ export default function ResultViewerPage() {
         const batch = await getBatch(batchId)
         const completedJobs = batch.jobs.filter((j) => j.status === 'COMPLETED')
         setAllJobs(completedJobs)
-
-        // Find current file index
         const idx = completedJobs.findIndex((j) => j.file_id === fileId)
         if (idx !== -1) setCurrentIndex(idx)
       } catch {
@@ -39,24 +38,17 @@ export default function ResultViewerPage() {
     fetchBatch()
   }, [batchId, fileId])
 
-  // Fetch current file and result
   useEffect(() => {
     const fetchFileAndResult = async () => {
       if (!fileId) return
       setLoading(true)
       try {
-        // Fetch file info
         const fileInfo = await getFile(fileId)
         setFile(fileInfo)
-
-        // Get original file URL for preview
         const urlResponse = await getOriginalUrl(fileId)
         setOriginalUrl(urlResponse.url)
-
-        // Find job for this file
         const currentJob = allJobs.find((j) => j.file_id === fileId)
         if (currentJob) {
-          // Fetch result
           const resultData = await getJobResult(currentJob.id)
           setResult(resultData)
         }
@@ -86,67 +78,70 @@ export default function ResultViewerPage() {
   const hasNext = currentIndex < allJobs.length - 1
   const hasPrev = currentIndex > 0
 
-  // Keyboard navigation
   useKeyboard({
     onLeft: hasPrev ? goPrev : undefined,
     onRight: hasNext ? goNext : undefined,
   })
 
-  const handleBack = () => {
-    navigate(`/batches/${batchId}`)
-  }
+  const handleBack = () => navigate(`/batches/${batchId}`)
 
   const handleCopyText = () => {
-    if (result?.text) {
-      navigator.clipboard.writeText(result.text)
-    }
+    if (result?.text) navigator.clipboard.writeText(result.text)
   }
 
-  if (loading) return <div className="loading">Loading...</div>
-  if (error) return <div className="error-message">{error}</div>
-  if (!file || !result) return <div className="error-message">Result not found</div>
+  if (loading) return <Loading text="Loading..." />
+  if (error) return <ErrorMessage message={error} />
+  if (!file || !result) return <ErrorMessage message="Result not found" />
 
   return (
-    <div className="result-viewer-page">
-      <div className="viewer-header">
-        <button className="back-btn" onClick={handleBack}>
+    <div className="flex flex-col h-[calc(100vh-48px)] -m-6 p-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
+        <ShadcnButton variant="ghost" size="sm" onClick={handleBack}>
+          <ArrowLeft className="h-4 w-4 mr-1" />
           Back to Batch
-        </button>
-        <h1>{file.original_name}</h1>
-        <div className="navigation">
-          <button onClick={goPrev} disabled={!hasPrev}>
-            Prev
-          </button>
-          <span>
+        </ShadcnButton>
+        <h1 className="text-sm font-medium text-foreground">{file.original_name}</h1>
+        <div className="flex items-center gap-2">
+          <ShadcnButton variant="ghost" size="icon" className="h-8 w-8" onClick={goPrev} disabled={!hasPrev}>
+            <ChevronLeft className="h-4 w-4" />
+          </ShadcnButton>
+          <span className="text-sm text-muted-foreground">
             {currentIndex + 1} / {allJobs.length}
           </span>
-          <button onClick={goNext} disabled={!hasNext}>
-            Next
-          </button>
+          <ShadcnButton variant="ghost" size="icon" className="h-8 w-8" onClick={goNext} disabled={!hasNext}>
+            <ChevronRight className="h-4 w-4" />
+          </ShadcnButton>
         </div>
       </div>
 
-      <div className="viewer-content">
-        <div className="original-panel">
-          <h3>Original</h3>
-          <div className="panel-content">
+      {/* Split panel */}
+      <div className="flex flex-1 gap-4 overflow-hidden">
+        {/* Original */}
+        <div className="flex-1 flex flex-col bg-card border border-border rounded-md overflow-hidden">
+          <div className="px-4 py-2 border-b border-border">
+            <h3 className="text-sm font-medium text-foreground">Original</h3>
+          </div>
+          <div className="flex-1 flex items-center justify-center p-4 overflow-auto">
             {originalUrl && (
-              <img
-                src={originalUrl}
-                alt={file.original_name}
-                className="original-image"
-              />
+              <img src={originalUrl} alt={file.original_name} className="max-w-full max-h-full object-contain" />
             )}
           </div>
         </div>
 
-        <div className="result-panel">
-          <div className="result-header">
-            <h3>Extracted Text</h3>
-            <button onClick={handleCopyText}>Copy</button>
+        {/* Result */}
+        <div className="flex-1 flex flex-col bg-card border border-border rounded-md overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+            <h3 className="text-sm font-medium text-foreground">Extracted Text</h3>
+            <ShadcnButton variant="ghost" size="sm" onClick={handleCopyText}>
+              <Copy className="h-3 w-3 mr-1" />
+              Copy
+            </ShadcnButton>
           </div>
-          <pre className="result-text">{result.text}</pre>
-          <div className="result-meta">
+          <pre className="flex-1 p-4 text-sm font-mono leading-6 whitespace-pre-wrap text-foreground overflow-auto">
+            {result.text}
+          </pre>
+          <div className="flex items-center gap-4 px-4 py-2 border-t border-border text-xs text-muted-foreground">
             <span>Lines: {result.lines}</span>
             <span>Time: {result.metadata.processing_time_ms}ms</span>
             <span>Method: {result.metadata.method}</span>

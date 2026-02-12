@@ -54,3 +54,6 @@ stitch_ocr_dashboard_upload
 **env
 01_frontend/ocr-platform-mvp-1.zip
 claude
+
+**_content.md
+**structure.md

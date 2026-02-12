@@ -1,4 +1,10 @@
 import { ReactNode } from 'react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface ModalProps {
   isOpen: boolean
@@ -8,14 +14,16 @@ interface ModalProps {
 }
 
 export default function Modal({ isOpen, onClose, title, children }: ModalProps) {
-  if (!isOpen) return null
-
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        {title && <h2 className="modal-title">{title}</h2>}
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        {title && (
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+          </DialogHeader>
+        )}
         {children}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

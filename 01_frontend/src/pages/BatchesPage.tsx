@@ -1,9 +1,19 @@
-// All batches list (nav: "Batches")
-
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Batch } from '../types'
 import { getBatches } from '../api/batches'
+import { Button as ShadcnButton } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import Loading from '../components/common/Loading'
+import ErrorMessage from '../components/common/ErrorMessage'
+import BatchStatus from '../components/batch/BatchStatus'
 
 export default function BatchesPage() {
   const [batches, setBatches] = useState<Batch[]>([])
@@ -25,66 +35,66 @@ export default function BatchesPage() {
     fetchBatches()
   }, [])
 
-  const handleRowClick = (batch: Batch) => {
-    navigate(`/batches/${batch.id}`)
-  }
-
-  if (loading) return <div className="loading">Loading...</div>
-  if (error) return <div className="error-message">{error}</div>
+  if (loading) return <Loading text="Loading..." />
+  if (error) return <ErrorMessage message={error} />
 
   return (
-    <div className="batches-page">
-      <div className="page-header">
-        <h1>Batches</h1>
-        <button className="primary" onClick={() => navigate('/upload')}>
-          New Upload
-        </button>
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-foreground">Batches</h1>
+        <ShadcnButton onClick={() => navigate('/upload')}>New Upload</ShadcnButton>
       </div>
 
       {batches.length === 0 ? (
-        <div className="empty-state">
-          <p>No batches yet. Upload some files to get started.</p>
+        <div className="text-center py-12 text-muted-foreground">
+          No batches yet. Upload some files to get started.
         </div>
       ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Request ID</th>
-              <th>Status</th>
-              <th>Total Files</th>
-              <th>Completed</th>
-              <th>Failed</th>
-              <th>Created At</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {batches.map((batch) => (
-              <tr key={batch.id} onClick={() => handleRowClick(batch)}>
-                <td>{batch.id.slice(0, 8)}...</td>
-                <td>
-                  <span className={`status-badge ${batch.status.toLowerCase()}`}>
-                    {batch.status}
-                  </span>
-                </td>
-                <td>{batch.total_files}</td>
-                <td>{batch.completed_files}</td>
-                <td>{batch.failed_files}</td>
-                <td>{new Date(batch.created_at).toLocaleString()}</td>
-                <td>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      navigate(`/batches/${batch.id}`)
-                    }}
-                  >
-                    View
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="rounded-md border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Request ID</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Total Files</TableHead>
+                <TableHead>Completed</TableHead>
+                <TableHead>Failed</TableHead>
+                <TableHead>Created At</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {batches.map((batch) => (
+                <TableRow
+                  key={batch.id}
+                  className="cursor-pointer"
+                  onClick={() => navigate(`/batches/${batch.id}`)}
+                >
+                  <TableCell className="font-mono">{batch.id.slice(0, 8)}...</TableCell>
+                  <TableCell>
+                    <BatchStatus status={batch.status} />
+                  </TableCell>
+                  <TableCell>{batch.total_files}</TableCell>
+                  <TableCell>{batch.completed_files}</TableCell>
+                  <TableCell>{batch.failed_files}</TableCell>
+                  <TableCell>{new Date(batch.created_at).toLocaleString()}</TableCell>
+                  <TableCell>
+                    <ShadcnButton
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        navigate(`/batches/${batch.id}`)
+                      }}
+                    >
+                      View
+                    </ShadcnButton>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   )

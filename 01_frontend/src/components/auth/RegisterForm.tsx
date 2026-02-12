@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
+import { Input as ShadcnInput } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Button as ShadcnButton } from '@/components/ui/button'
 
 export default function RegisterForm() {
   const [email, setEmail] = useState('')
@@ -43,12 +46,16 @@ export default function RegisterForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="register-form">
-      {error && <div className="error-message">{error}</div>}
+    <form onSubmit={handleSubmit} className="space-y-4">
+      {error && (
+        <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md p-3">
+          {error}
+        </div>
+      )}
 
-      <div className="form-group">
-        <label htmlFor="email">Email</label>
-        <input
+      <div className="space-y-2">
+        <Label htmlFor="email">Email</Label>
+        <ShadcnInput
           id="email"
           type="email"
           value={email}
@@ -59,9 +66,9 @@ export default function RegisterForm() {
         />
       </div>
 
-      <div className="form-group">
-        <label htmlFor="password">Password</label>
-        <input
+      <div className="space-y-2">
+        <Label htmlFor="password">Password</Label>
+        <ShadcnInput
           id="password"
           type="password"
           value={password}
@@ -72,9 +79,9 @@ export default function RegisterForm() {
         />
       </div>
 
-      <div className="form-group">
-        <label htmlFor="confirmPassword">Confirm Password</label>
-        <input
+      <div className="space-y-2">
+        <Label htmlFor="confirmPassword">Confirm Password</Label>
+        <ShadcnInput
           id="confirmPassword"
           type="password"
           value={confirmPassword}
@@ -85,12 +92,13 @@ export default function RegisterForm() {
         />
       </div>
 
-      <button type="submit" disabled={loading} className="submit-btn">
+      <ShadcnButton type="submit" disabled={loading} className="w-full" size="lg">
         {loading ? 'Creating account...' : 'Register'}
-      </button>
+      </ShadcnButton>
 
-      <p className="form-footer">
-        Already have an account? <Link to="/login">Login</Link>
+      <p className="text-center text-sm text-muted-foreground mt-6">
+        Already have an account?{' '}
+        <Link to="/login" className="text-primary hover:underline">Login</Link>
       </p>
     </form>
   )

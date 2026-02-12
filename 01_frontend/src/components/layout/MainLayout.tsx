@@ -1,12 +1,11 @@
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 
-// Layout wrapper (sidebar + content area)
 export default function MainLayout() {
   return (
-    <div className="main-layout">
+    <div className="flex min-h-screen">
       <Sidebar />
-      <main className="main-content">
+      <main className="flex-1 ml-[240px] p-6 min-h-screen">
         <Outlet />
       </main>
     </div>

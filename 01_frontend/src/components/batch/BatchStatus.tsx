@@ -1,11 +1,26 @@
 import { BatchStatus as Status } from '../../types'
+import { cn } from '@/lib/utils'
 
-// Status badge (Processing, Completed, Partial Success, Failed, Cancelled)
 interface BatchStatusProps {
   status: Status
 }
 
+const statusStyles: Record<string, string> = {
+  processing: 'bg-processing/20 text-processing',
+  completed: 'bg-success/20 text-success',
+  partial_success: 'bg-warning/20 text-warning',
+  failed: 'bg-destructive/20 text-destructive',
+  cancelled: 'bg-muted text-muted-foreground',
+}
+
 export default function BatchStatus({ status }: BatchStatusProps) {
-  // TODO: Render status badge with appropriate color
-  return <span className={`batch-status ${status.toLowerCase()}`}>{status}</span>
+  const key = status.toLowerCase()
+  return (
+    <span className={cn(
+      'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
+      statusStyles[key] || 'bg-muted text-muted-foreground'
+    )}>
+      {status}
+    </span>
+  )
 }

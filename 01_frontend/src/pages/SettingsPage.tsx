@@ -1,13 +1,13 @@
-// User settings (from nav: "Settings")
-
 export default function SettingsPage() {
   return (
-    <div className="settings-page">
-      <h1>Settings</h1>
-      {/* User profile */}
-      {/* Change password */}
-      {/* Default output format */}
-      {/* Default retention */}
+    <div>
+      <h1 className="text-2xl font-bold text-foreground mb-6">Settings</h1>
+      <div className="text-sm text-muted-foreground">
+        {/* User profile */}
+        {/* Change password */}
+        {/* Default output format */}
+        {/* Default retention */}
+      </div>
     </div>
   )
 }

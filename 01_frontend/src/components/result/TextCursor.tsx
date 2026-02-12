@@ -1,5 +1,3 @@
-// Bottom-right: "Ln 22, Col 1" indicator
-
 interface TextCursorProps {
   line: number
   column: number
@@ -7,7 +5,7 @@ interface TextCursorProps {
 
 export default function TextCursor({ line, column }: TextCursorProps) {
   return (
-    <div className="text-cursor">
+    <div className="text-xs text-muted-foreground text-right py-1 px-4">
       Ln {line}, Col {column}
     </div>
   )

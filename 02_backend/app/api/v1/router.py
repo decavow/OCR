@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import auth, upload, requests, jobs, files, health, services
-from app.api.v1.endpoints.admin import service_types, service_instances
+from app.api.v1.endpoints.admin import service_types, service_instances, dashboard as admin_dashboard
 from app.api.v1.internal import file_proxy, heartbeat, job_status, register
 
 api_router = APIRouter()
@@ -20,6 +20,7 @@ api_router.include_router(services.router, prefix="/services", tags=["services"]
 # Admin endpoints (for managing service types and instances)
 api_router.include_router(service_types.router, prefix="/admin/service-types", tags=["admin"])
 api_router.include_router(service_instances.router, prefix="/admin/service-instances", tags=["admin"])
+api_router.include_router(admin_dashboard.router, prefix="/admin/dashboard", tags=["admin"])
 
 # Internal endpoints (Worker <-> Orchestration)
 api_router.include_router(register.router, prefix="/internal", tags=["internal"])

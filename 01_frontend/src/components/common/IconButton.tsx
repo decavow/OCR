@@ -1,15 +1,22 @@
 import { ButtonHTMLAttributes, ReactNode } from 'react'
+import { Button as ShadcnButton } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
-// For nav arrows, copy, download icons
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon: ReactNode
   label?: string
 }
 
-export default function IconButton({ icon, label, ...props }: IconButtonProps) {
+export default function IconButton({ icon, label, className, ...props }: IconButtonProps) {
   return (
-    <button className="icon-button" aria-label={label} {...props}>
+    <ShadcnButton
+      variant="ghost"
+      size="icon"
+      aria-label={label}
+      className={cn(className)}
+      {...props}
+    >
       {icon}
-    </button>
+    </ShadcnButton>
   )
 }

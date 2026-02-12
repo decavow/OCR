@@ -91,3 +91,15 @@ class RequestRepository(BaseRepository[Request]):
         """Soft delete request."""
         request.deleted_at = datetime.now(timezone.utc)
         return self.update(request)
+
+    def count_all_active(self) -> int:
+        """Count all active requests (all users)."""
+        return self.db.query(Request).filter(
+            Request.deleted_at.is_(None)
+        ).count()
+
+    def get_all_recent(self, skip: int = 0, limit: int = 20) -> List[Request]:
+        """Get recent requests from all users."""
+        return self.db.query(Request).filter(
+            Request.deleted_at.is_(None)
+        ).order_by(Request.created_at.desc()).offset(skip).limit(limit).all()

@@ -8,6 +8,11 @@ import {
   PRICING,
 } from '../../config'
 import { getAvailableServices, AvailableService } from '../../api/services'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
+import { cn } from '@/lib/utils'
+import { Settings, DollarSign } from 'lucide-react'
 
 interface UploadConfigProps {
   config: Config
@@ -31,21 +36,24 @@ function formatVND(amount: number): string {
   return amount.toLocaleString('vi-VN') + ' VND'
 }
 
-// Build method+tier options from available services
 function buildOptions(services: AvailableService[]) {
   const methods = new Set<string>()
   const tiers = new Set<number>()
-
   for (const svc of services) {
     for (const m of svc.allowed_methods) methods.add(m)
     for (const t of svc.allowed_tiers) tiers.add(t)
   }
-
-  const methodOpts = METHOD_OPTIONS.filter((m) => methods.has(m.value))
-  const tierOpts = TIER_OPTIONS.filter((t) => tiers.has(t.value))
-
-  return { methodOpts, tierOpts }
+  return {
+    methodOpts: METHOD_OPTIONS.filter((m) => methods.has(m.value)),
+    tierOpts: TIER_OPTIONS.filter((t) => tiers.has(t.value)),
+  }
 }
+
+const selectClass = cn(
+  'flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm',
+  'ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+  'disabled:cursor-not-allowed disabled:opacity-50'
+)
 
 export default function UploadConfig({ config, onChange, fileCount, onServicesLoaded }: UploadConfigProps) {
   const [services, setServices] = useState<AvailableService[]>([])
@@ -64,145 +72,137 @@ export default function UploadConfig({ config, onChange, fileCount, onServicesLo
       .finally(() => setLoading(false))
   }, [])
 
-  // Dynamic options from API — only show approved services
   const { methodOpts, tierOpts } = services.length > 0
     ? buildOptions(services)
     : { methodOpts: [], tierOpts: [] }
 
   const ratePerPage = getRatePerPage(config.method, config.tier)
   const estimatedPrice = fileCount * ratePerPage
-
   const currentMethod = methodOpts.find((m) => m.value === config.method)
   const currentTier = tierOpts.find((t) => t.value === config.tier)
-
   const noServices = !loading && services.length === 0
 
   return (
-    <div className="upload-config-panel">
-      {/* Configuration Section */}
-      <div className="config-card">
-        <h3 className="config-card-title">
-          <span className="config-icon">&#9881;</span>
-          Configuration
-        </h3>
-
-        {noServices && (
-          <div className="config-warning">
-            No OCR services are currently available. Please contact admin.
-          </div>
-        )}
-
-        <div className="config-group">
-          <label htmlFor="ocr-method">OCR Service Engine</label>
-          <select
-            id="ocr-method"
-            value={config.method}
-            onChange={(e) => onChange({ ...config, method: e.target.value })}
-            disabled={loading || noServices}
-          >
-            {loading && <option>Loading...</option>}
-            {noServices && <option value="">No services available</option>}
-            {methodOpts.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          {currentMethod && (
-            <span className="config-hint">{currentMethod.description}</span>
+    <div className="flex flex-col gap-4">
+      {/* Configuration */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Settings className="h-4 w-4" />
+            Configuration
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {noServices && (
+            <div className="text-sm text-warning bg-warning/10 border border-warning/30 rounded-md p-3">
+              No OCR services are currently available. Please contact admin.
+            </div>
           )}
-        </div>
 
-        <div className="config-group">
-          <label htmlFor="ocr-tier">Processing Tier</label>
-          <select
-            id="ocr-tier"
-            value={config.tier}
-            onChange={(e) => onChange({ ...config, tier: parseInt(e.target.value, 10) })}
-            disabled={loading || noServices}
-          >
-            {loading && <option>Loading...</option>}
-            {noServices && <option value="">No services available</option>}
-            {tierOpts.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          {currentTier && (
-            <span className="config-hint">{currentTier.description}</span>
-          )}
-        </div>
-
-        <div className="config-row">
-          <div className="config-group">
-            <label htmlFor="output-format">Output Format</label>
+          <div className="space-y-2">
+            <Label htmlFor="ocr-method">OCR Service Engine</Label>
             <select
-              id="output-format"
-              value={config.output_format}
-              onChange={(e) =>
-                onChange({ ...config, output_format: e.target.value as 'txt' | 'json' })
-              }
+              id="ocr-method"
+              className={selectClass}
+              value={config.method}
+              onChange={(e) => onChange({ ...config, method: e.target.value })}
+              disabled={loading || noServices}
             >
-              {OUTPUT_FORMATS.map((format) => (
-                <option key={format} value={format}>
-                  {format.toUpperCase()}
-                </option>
+              {loading && <option>Loading...</option>}
+              {noServices && <option value="">No services available</option>}
+              {methodOpts.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+            {currentMethod && (
+              <p className="text-xs text-muted-foreground">{currentMethod.description}</p>
+            )}
           </div>
 
-          <div className="config-group">
-            <label htmlFor="retention">Retention</label>
+          <div className="space-y-2">
+            <Label htmlFor="ocr-tier">Processing Tier</Label>
             <select
-              id="retention"
-              value={config.retention_hours}
-              onChange={(e) =>
-                onChange({ ...config, retention_hours: parseInt(e.target.value, 10) })
-              }
+              id="ocr-tier"
+              className={selectClass}
+              value={config.tier}
+              onChange={(e) => onChange({ ...config, tier: parseInt(e.target.value, 10) })}
+              disabled={loading || noServices}
             >
-              {RETENTION_OPTIONS.map((hours) => (
-                <option key={hours} value={hours}>
-                  {RETENTION_LABELS[hours] || `${hours} hours`}
-                </option>
+              {loading && <option>Loading...</option>}
+              {noServices && <option value="">No services available</option>}
+              {tierOpts.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+            {currentTier && (
+              <p className="text-xs text-muted-foreground">{currentTier.description}</p>
+            )}
           </div>
-        </div>
-      </div>
 
-      {/* Cost Estimation Section */}
-      <div className="config-card">
-        <h3 className="config-card-title">
-          <span className="config-icon">&#128176;</span>
-          Cost Estimation
-        </h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="output-format">Output Format</Label>
+              <select
+                id="output-format"
+                className={selectClass}
+                value={config.output_format}
+                onChange={(e) => onChange({ ...config, output_format: e.target.value as 'txt' | 'json' })}
+              >
+                {OUTPUT_FORMATS.map((format) => (
+                  <option key={format} value={format}>{format.toUpperCase()}</option>
+                ))}
+              </select>
+            </div>
 
-        <div className="cost-breakdown">
-          <div className="cost-row">
-            <span className="cost-label">Total Files</span>
-            <span className="cost-value">{fileCount}</span>
+            <div className="space-y-2">
+              <Label htmlFor="retention">Retention</Label>
+              <select
+                id="retention"
+                className={selectClass}
+                value={config.retention_hours}
+                onChange={(e) => onChange({ ...config, retention_hours: parseInt(e.target.value, 10) })}
+              >
+                {RETENTION_OPTIONS.map((hours) => (
+                  <option key={hours} value={hours}>{RETENTION_LABELS[hours] || `${hours} hours`}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="cost-row">
-            <span className="cost-label">Rate per Page</span>
-            <span className="cost-value">{formatVND(ratePerPage)}</span>
-          </div>
-          <div className="cost-divider"></div>
-          <div className="cost-row cost-total">
-            <span className="cost-label">Estimated Price</span>
-            <span className="cost-value">{formatVND(estimatedPrice)}</span>
-          </div>
-        </div>
+        </CardContent>
+      </Card>
 
-        <div className="cost-notice">
-          Pricing is estimated. Actual cost may vary based on page count per file.
-        </div>
-      </div>
+      {/* Cost Estimation */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <DollarSign className="h-4 w-4" />
+            Cost Estimation
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Total Files</span>
+            <span className="text-foreground">{fileCount}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Rate per Page</span>
+            <span className="text-foreground">{formatVND(ratePerPage)}</span>
+          </div>
+          <Separator />
+          <div className="flex justify-between text-sm font-semibold">
+            <span>Estimated Price</span>
+            <span className="text-primary">{formatVND(estimatedPrice)}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Pricing is estimated. Actual cost may vary based on page count per file.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Active Model Badge */}
-      <div className="active-model-badge">
-        <span className="model-badge-label">Active Model</span>
-        <span className="model-badge-value">
+      <div className="flex items-center justify-between rounded-md bg-primary/10 border border-primary/20 px-4 py-3">
+        <span className="text-xs text-muted-foreground">Active Model</span>
+        <span className="text-sm font-medium text-primary">
           {currentMethod?.label ?? config.method} &middot; {currentTier?.label ?? `Tier ${config.tier}`}
         </span>
       </div>

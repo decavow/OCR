@@ -10,9 +10,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Binarization (Otsu, adaptive threshold) · • Deskew (Hough Transform, projection profile) · • Denoise (Gaussian, median filter) · • DPI normalization (→ 300 DPI) · • PDF text layer check (digital → skip OCR) |
-| **Model / Engine** | • Traditional OCR: Tesseract, PaddleOCR, EasyOCR · • Cloud: Google Vision, AWS Textract (DetectText) · • Digital PDF: extract trực tiếp bằng parser, không cần model |
-| **Post-processing** | • Spell-check (symspellpy) · • Language detection · • Unicode normalization · • Confidence filtering |
+| **Preprocessing** | • Binarization (Otsu, adaptive threshold) <br> • Deskew (Hough Transform, projection profile) <br> • Denoise (Gaussian, median filter) <br> • DPI normalization (→ 300 DPI) <br> • PDF text layer check (digital → skip OCR) |
+| **Model / Engine** | • Traditional OCR: Tesseract, PaddleOCR, EasyOCR <br> • Cloud: Google Vision, AWS Textract (DetectText) <br> • Digital PDF: extract trực tiếp bằng parser, không cần model |
+| **Post-processing** | • Spell-check (symspellpy) <br> • Language detection <br> • Unicode normalization <br> • Confidence filtering |
 
 > **Năng lực tổ chức:** CV cơ bản, Systems Engineering
 
@@ -22,9 +22,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Tất cả preprocessing của A1 · • Page segmentation (tách vùng text, hình, bảng) · • Column detection (projection profile theo trục X) · • Reading order analysis |
-| **Model / Engine** | • Document Layout Analysis: LayoutParser, Surya, DiT, PubLayNet-Detectron2 · • OCR + layout: DocTR, Google Document AI · • Layout model: LayoutLMv3, YOLOv8 fine-tuned cho document zones |
-| **Post-processing** | • Reading order reconstruction · • Zone merging (header/footer removal) · • Markdown/HTML generation · • Multi-column text stitching |
+| **Preprocessing** | • Tất cả preprocessing của A1 <br> • Page segmentation (tách vùng text, hình, bảng) <br> • Column detection (projection profile theo trục X) <br> • Reading order analysis |
+| **Model / Engine** | • Document Layout Analysis: LayoutParser, Surya, DiT, PubLayNet-Detectron2 <br> • OCR + layout: DocTR, Google Document AI <br> • Layout model: LayoutLMv3, YOLOv8 fine-tuned cho document zones |
+| **Post-processing** | • Reading order reconstruction <br> • Zone merging (header/footer removal) <br> • Markdown/HTML generation <br> • Multi-column text stitching |
 
 > **Năng lực tổ chức:** CV trung bình, ML Engineering (layout model), Systems Engineering
 
@@ -34,9 +34,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Tất cả preprocessing của A2 · • Font classification (serif/sans-serif detection) · • Bold detection (stroke width analysis) · • Italic detection (slant angle) · • Character height → font size estimation |
-| **Model / Engine** | • Enterprise OCR: ABBYY FineReader SDK, Adobe Acrobat SDK · • Cloud: Azure Document Intelligence (rich formatting) · • Custom: CNN font classifier + OCR engine · • Style attribute detection model |
-| **Post-processing** | • Style mapping → DOCX/rich HTML · • Font family matching (nearest system font) · • Color extraction & mapping · • Superscript/subscript baseline detection |
+| **Preprocessing** | • Tất cả preprocessing của A2 <br> • Font classification (serif/sans-serif detection) <br> • Bold detection (stroke width analysis) <br> • Italic detection (slant angle) <br> • Character height → font size estimation |
+| **Model / Engine** | • Enterprise OCR: ABBYY FineReader SDK, Adobe Acrobat SDK <br> • Cloud: Azure Document Intelligence (rich formatting) <br> • Custom: CNN font classifier + OCR engine <br> • Style attribute detection model |
+| **Post-processing** | • Style mapping → DOCX/rich HTML <br> • Font family matching (nearest system font) <br> • Color extraction & mapping <br> • Superscript/subscript baseline detection |
 
 > **Năng lực tổ chức:** CV nâng cao, ML Engineering cao, Systems Engineering
 
@@ -48,9 +48,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Bordered: line detection (HoughLinesP), morphological ops (erode/dilate → grid) · • Borderless: text alignment clustering, column gap analysis · • Cell boundary detection (contour → bounding box) · • Table region isolation từ full page |
-| **Model / Engine** | • Bordered: OpenCV line intersection (rule-based, không cần DL) · • Borderless: Table Transformer (DETR), CascadeTabNet, TableNet · • Tích hợp: PaddleOCR ppstructure, AWS Textract (Tables) · • Per-cell OCR sau khi detect cells |
-| **Post-processing** | • Cell content OCR · • Spanning cell reconstruction (rowspan/colspan) · • Header row detection · • Data type inference per column · • Output: DataFrame → CSV/Excel/JSON |
+| **Preprocessing** | • Bordered: line detection (HoughLinesP), morphological ops (erode/dilate → grid) <br> • Borderless: text alignment clustering, column gap analysis <br> • Cell boundary detection (contour → bounding box) <br> • Table region isolation từ full page |
+| **Model / Engine** | • Bordered: OpenCV line intersection (rule-based, không cần DL) <br> • Borderless: Table Transformer (DETR), CascadeTabNet, TableNet <br> • Tích hợp: PaddleOCR ppstructure, AWS Textract (Tables) <br> • Per-cell OCR sau khi detect cells |
+| **Post-processing** | • Cell content OCR <br> • Spanning cell reconstruction (rowspan/colspan) <br> • Header row detection <br> • Data type inference per column <br> • Output: DataFrame → CSV/Excel/JSON |
 
 > **Năng lực tổ chức:** CV trung bình–cao, ML Engineering (borderless), Domain Knowledge (hiểu cấu trúc bảng)
 
@@ -60,9 +60,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Checkbox detection (template matching, contour + aspect ratio filter) · • Radio button detection · • Text field boundary detection · • Form region segmentation · • Checked/unchecked classification (pixel count trong ROI) |
-| **Model / Engine** | • LayoutLMv2/v3 fine-tuned (SOTA cho form understanding) · • BROS (BERT for document structure) · • Cloud: AWS Textract (Forms), Azure Form Recognizer · • End-to-end: Donut · • Spatial proximity matching (rule-based fallback) |
-| **Post-processing** | • Label-value pairing (spatial proximity + direction heuristic) · • Key normalization (fuzzy matching tên field) · • Checkbox state → boolean · • JSON schema validation (Pydantic) · • Confidence scoring per field |
+| **Preprocessing** | • Checkbox detection (template matching, contour + aspect ratio filter) <br> • Radio button detection <br> • Text field boundary detection <br> • Form region segmentation <br> • Checked/unchecked classification (pixel count trong ROI) |
+| **Model / Engine** | • LayoutLMv2/v3 fine-tuned (SOTA cho form understanding) <br> • BROS (BERT for document structure) <br> • Cloud: AWS Textract (Forms), Azure Form Recognizer <br> • End-to-end: Donut <br> • Spatial proximity matching (rule-based fallback) |
+| **Post-processing** | • Label-value pairing (spatial proximity + direction heuristic) <br> • Key normalization (fuzzy matching tên field) <br> • Checkbox state → boolean <br> • JSON schema validation (Pydantic) <br> • Confidence scoring per field |
 
 > **Năng lực tổ chức:** CV trung bình, ML Engineering cao (fine-tune LayoutLM), Domain Knowledge (hiểu form schema), Data Annotation (key-value pairs)
 
@@ -72,9 +72,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Indent-level measurement (left-edge bbox → cluster thành levels) · • Bullet/number pattern detection · • Vertical spacing analysis (gap between items) · • Nesting depth estimation |
-| **Model / Engine** | • Rule-based: Regex pattern matching cho numbering (Điều X, Khoản Y, Điểm Z, 1., a), •, –) · • LayoutLMv3 sequence labeling (list item classification) · • Surya layout detection · • Hybrid: regex + ML confidence |
-| **Post-processing** | • Tree construction algorithm · • Numbering pattern normalization · • TOC linking (page number → section) · • Parent-child relationship inference · • Output: nested JSON/XML tree |
+| **Preprocessing** | • Indent-level measurement (left-edge bbox → cluster thành levels) <br> • Bullet/number pattern detection <br> • Vertical spacing analysis (gap between items) <br> • Nesting depth estimation |
+| **Model / Engine** | • Rule-based: Regex pattern matching cho numbering (Điều X, Khoản Y, Điểm Z, 1., a), •, –) <br> • LayoutLMv3 sequence labeling (list item classification) <br> • Surya layout detection <br> • Hybrid: regex + ML confidence |
+| **Post-processing** | • Tree construction algorithm <br> • Numbering pattern normalization <br> • TOC linking (page number → section) <br> • Parent-child relationship inference <br> • Output: nested JSON/XML tree |
 
 > **Năng lực tổ chức:** NLP (pattern matching), Domain Knowledge cao (cấu trúc VB pháp luật), ML Engineering nhẹ
 
@@ -86,9 +86,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • OCR pipeline (A1/A2) là preprocessing · • Word segmentation (quan trọng cho tiếng Việt) · • Sentence segmentation · • Text normalization (Unicode, dấu thanh) |
-| **Model / Engine** | • NER: PhoBERT + NER head, spaCy vi_core_news, Underthesea · • Regex cho structured entity (CMND, phone, email, MST) · • dateparser cho ngày tháng đa format · • Hybrid: ML NER + regex post-pass · • Cloud: Google NLP, AWS Comprehend |
-| **Post-processing** | • Entity normalization (date format, phone format) · • Entity linking & deduplication · • Confidence scoring · • Cross-reference resolution · • Output: labeled entities + positions |
+| **Preprocessing** | • OCR pipeline (A1/A2) là preprocessing <br> • Word segmentation (quan trọng cho tiếng Việt) <br> • Sentence segmentation <br> • Text normalization (Unicode, dấu thanh) |
+| **Model / Engine** | • NER: PhoBERT + NER head, spaCy vi_core_news, Underthesea <br> • Regex cho structured entity (CMND, phone, email, MST) <br> • dateparser cho ngày tháng đa format <br> • Hybrid: ML NER + regex post-pass <br> • Cloud: Google NLP, AWS Comprehend |
+| **Post-processing** | • Entity normalization (date format, phone format) <br> • Entity linking & deduplication <br> • Confidence scoring <br> • Cross-reference resolution <br> • Output: labeled entities + positions |
 
 > **Năng lực tổ chức:** NLP cao (word segmentation VN), ML Engineering trung bình, Domain Knowledge (entity types)
 
@@ -98,9 +98,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Document classification (xác định loại tài liệu → chọn schema) · • Image classifier: ResNet/EfficientNet fine-tuned · • Keyword-based routing (rule-based fallback) · • Template matching cho tài liệu có layout cố định |
-| **Model / Engine** | • LayoutLMv3 fine-tuned per document type · • Donut end-to-end (image → JSON, không cần OCR riêng) · • Pix2Struct · • VLM: GPT-4o, Claude Vision (zero/few-shot, linh hoạt nhất) · • Cloud: Azure Custom Models, Google Custom Extractor |
-| **Post-processing** | • JSON schema validation (Pydantic) · • Business rule validation (cross-field check) · • Confidence thresholding · • Human-in-the-loop routing (low confidence → review) · • Output: structured JSON theo schema định sẵn |
+| **Preprocessing** | • Document classification (xác định loại tài liệu → chọn schema) <br> • Image classifier: ResNet/EfficientNet fine-tuned <br> • Keyword-based routing (rule-based fallback) <br> • Template matching cho tài liệu có layout cố định |
+| **Model / Engine** | • LayoutLMv3 fine-tuned per document type <br> • Donut end-to-end (image → JSON, không cần OCR riêng) <br> • Pix2Struct <br> • VLM: GPT-4o, Claude Vision (zero/few-shot, linh hoạt nhất) <br> • Cloud: Azure Custom Models, Google Custom Extractor |
+| **Post-processing** | • JSON schema validation (Pydantic) <br> • Business rule validation (cross-field check) <br> • Confidence thresholding <br> • Human-in-the-loop routing (low confidence → review) <br> • Output: structured JSON theo schema định sẵn |
 
 > **Năng lực tổ chức:** ML Engineering cao (fine-tune per doc type), Domain Knowledge rất cao, Data Annotation nhiều, QA & Evaluation
 
@@ -110,9 +110,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Entity extraction pipeline (C1/C2) là preprocessing · • Coreference detection (Bên A = Bên A ở điều khác) · • Section/paragraph segmentation · • Cross-reference detection (xem Điều X, theo Phụ lục Y) |
-| **Model / Engine** | • Relation extraction: REBEL, SpERT · • LayoutLMv3 + relation classification head · • LLM prompting (few-shot) — phổ biến nhất hiện tại · • Graph Neural Network cho document graph · • Rule-based: regex cho cross-reference patterns |
-| **Post-processing** | • Knowledge graph construction (NetworkX, Neo4j) · • Relation type classification · • Confidence scoring · • Coreference chain resolution · • Output: entity-relation graph / triples |
+| **Preprocessing** | • Entity extraction pipeline (C1/C2) là preprocessing <br> • Coreference detection (Bên A = Bên A ở điều khác) <br> • Section/paragraph segmentation <br> • Cross-reference detection (xem Điều X, theo Phụ lục Y) |
+| **Model / Engine** | • Relation extraction: REBEL, SpERT <br> • LayoutLMv3 + relation classification head <br> • LLM prompting (few-shot) — phổ biến nhất hiện tại <br> • Graph Neural Network cho document graph <br> • Rule-based: regex cho cross-reference patterns |
+| **Post-processing** | • Knowledge graph construction (NetworkX, Neo4j) <br> • Relation type classification <br> • Confidence scoring <br> • Coreference chain resolution <br> • Output: entity-relation graph / triples |
 
 > **Năng lực tổ chức:** NLP rất cao, ML Engineering cao, Domain Knowledge rất cao, Data Annotation phức tạp
 
@@ -124,9 +124,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Sauvola binarization (tốt hơn Otsu cho chữ viết tay) · • Slant correction (stroke angle detection → warpAffine) · • Baseline detection (horizontal projection) · • Line segmentation (seam carving) · • Word segmentation (connected component + gap) · • Stroke width normalization |
-| **Model / Engine** | • TrOCR (Transformer, Microsoft) — SOTA, cần fine-tune · • Kraken · • Cloud: Google Vision (DOCUMENT_TEXT_DETECTION), AWS Textract · • CTC-based models (CRNN + CTC decoder) · • LM-augmented beam search decoding |
-| **Post-processing** | • Language model re-ranking (CTC + LM beam search) · • Heavy spell correction · • Confidence-based rejection (loại kết quả confidence thấp) · • Dấu thanh tiếng Việt correction · • Output: text + per-word confidence |
+| **Preprocessing** | • Sauvola binarization (tốt hơn Otsu cho chữ viết tay) <br> • Slant correction (stroke angle detection → warpAffine) <br> • Baseline detection (horizontal projection) <br> • Line segmentation (seam carving) <br> • Word segmentation (connected component + gap) <br> • Stroke width normalization |
+| **Model / Engine** | • TrOCR (Transformer, Microsoft) — SOTA, cần fine-tune <br> • Kraken <br> • Cloud: Google Vision (DOCUMENT_TEXT_DETECTION), AWS Textract <br> • CTC-based models (CRNN + CTC decoder) <br> • LM-augmented beam search decoding |
+| **Post-processing** | • Language model re-ranking (CTC + LM beam search) <br> • Heavy spell correction <br> • Confidence-based rejection (loại kết quả confidence thấp) <br> • Dấu thanh tiếng Việt correction <br> • Output: text + per-word confidence |
 
 > **Năng lực tổ chức:** CV nâng cao (preprocessing đặc thù), ML Engineering rất cao (train/fine-tune HTR), Data Annotation rất nhiều (transcript chữ viết tay), QA & Evaluation (accuracy thấp hơn printed)
 
@@ -136,9 +136,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Color space conversion (BGR → HSV/Lab) · • Color-based segmentation (đỏ: H∈[0,10]∪[170,180]) · • Edge detection (Canny) · • Morphological cleanup · • ROI extraction cho vùng stamp/signature |
-| **Model / Engine** | • Object detection: YOLOv8/v5 fine-tuned, Faster R-CNN · • Instance segmentation: Mask R-CNN · • Signature verification: Siamese Network · • Stamp text OCR: polar transform → straighten → OCR · • Binary classifier: có stamp/signature hay không |
-| **Post-processing** | • Position mapping (page, coordinates) · • Presence/absence classification · • Signature similarity scoring · • Stamp text extraction (circular text) · • Output: detection + classification + position |
+| **Preprocessing** | • Color space conversion (BGR → HSV/Lab) <br> • Color-based segmentation (đỏ: H∈[0,10]∪[170,180]) <br> • Edge detection (Canny) <br> • Morphological cleanup <br> • ROI extraction cho vùng stamp/signature |
+| **Model / Engine** | • Object detection: YOLOv8/v5 fine-tuned, Faster R-CNN <br> • Instance segmentation: Mask R-CNN <br> • Signature verification: Siamese Network <br> • Stamp text OCR: polar transform → straighten → OCR <br> • Binary classifier: có stamp/signature hay không |
+| **Post-processing** | • Position mapping (page, coordinates) <br> • Presence/absence classification <br> • Signature similarity scoring <br> • Stamp text extraction (circular text) <br> • Output: detection + classification + position |
 
 > **Năng lực tổ chức:** CV cao (color segmentation, object detection), ML Engineering cao (fine-tune detector), Data Annotation (bounding box), Domain Knowledge (vị trí stamp/sig trong tài liệu VN)
 
@@ -148,9 +148,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • ROI detection (locate barcode/QR region) · • Contrast enhancement · • Perspective correction (cho mã bị nghiêng/cong) · • Resolution upscaling nếu mã quá nhỏ |
-| **Model / Engine** | • Dedicated readers: ZBar (pyzbar), OpenCV BarcodeDetector · • Mobile: Google ML Kit, Apple Vision · • 1D: EAN-13, Code 128, Code 39, UPC-A · • 2D: QR Code, Data Matrix, PDF417, Aztec |
-| **Post-processing** | • Payload decoding · • URL/data validation · • Format-specific parsing · • Error detection (mã bị hỏng 1 phần) · • Output: type + decoded data + position |
+| **Preprocessing** | • ROI detection (locate barcode/QR region) <br> • Contrast enhancement <br> • Perspective correction (cho mã bị nghiêng/cong) <br> • Resolution upscaling nếu mã quá nhỏ |
+| **Model / Engine** | • Dedicated readers: ZBar (pyzbar), OpenCV BarcodeDetector <br> • Mobile: Google ML Kit, Apple Vision <br> • 1D: EAN-13, Code 128, Code 39, UPC-A <br> • 2D: QR Code, Data Matrix, PDF417, Aztec |
+| **Post-processing** | • Payload decoding <br> • URL/data validation <br> • Format-specific parsing <br> • Error detection (mã bị hỏng 1 phần) <br> • Output: type + decoded data + position |
 
 > **Năng lực tổ chức:** CV cơ bản, Systems Engineering (Mature libraries, ít cần ML)
 
@@ -160,9 +160,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Formula region detection (tách formula khỏi text) · • Inline vs display formula classification · • Symbol isolation · • Binarization (formula thường có ký tự nhỏ, nét mảnh) |
-| **Model / Engine** | • pix2tex (LaTeX-OCR): ViT encoder + autoregressive decoder · • Nougat (Meta): PDF → Markdown bao gồm LaTeX · • Mathpix API (accuracy cao nhất, thương mại) · • InftyReader (STEM documents) · • im2latex models |
-| **Post-processing** | • LaTeX validation & cleanup · • MathML conversion (latex2mathml) · • Rendering verification (KaTeX/MathJax) · • Multi-line equation stitching · • Output: LaTeX string hoặc MathML |
+| **Preprocessing** | • Formula region detection (tách formula khỏi text) <br> • Inline vs display formula classification <br> • Symbol isolation <br> • Binarization (formula thường có ký tự nhỏ, nét mảnh) |
+| **Model / Engine** | • pix2tex (LaTeX-OCR): ViT encoder + autoregressive decoder <br> • Nougat (Meta): PDF → Markdown bao gồm LaTeX <br> • Mathpix API (accuracy cao nhất, thương mại) <br> • InftyReader (STEM documents) <br> • im2latex models |
+| **Post-processing** | • LaTeX validation & cleanup <br> • MathML conversion (latex2mathml) <br> • Rendering verification (KaTeX/MathJax) <br> • Multi-line equation stitching <br> • Output: LaTeX string hoặc MathML |
 
 > **Năng lực tổ chức:** ML Engineering cao (specialized models), Domain Knowledge (toán, hóa, vật lý), QA & Evaluation (formula accuracy)
 
@@ -172,9 +172,9 @@
 
 | Bước | Kỹ thuật |
 |------|----------|
-| **Preprocessing** | • Chart region detection (YOLO/Faster R-CNN) · • Chart type classification (bar/line/pie/flow) · • Axis detection & scale extraction · • Legend detection · • Color-based series separation |
-| **Model / Engine** | • Chart → data: DePlot (Google), MatCha, ChartOCR, UniChart · • VLM: GPT-4o, Claude Vision (describe/summarize) · • Flowchart: node detection + edge detection → graph · • Bar/Line: element detection → value mapping · • Pie: segment angle measurement |
-| **Post-processing** | • Data table reconstruction (CSV/JSON) · • Axis label → data mapping · • Chart summarization (text description) · • Flowchart → Mermaid/DOT conversion · • Output: data table hoặc structured description |
+| **Preprocessing** | • Chart region detection (YOLO/Faster R-CNN) <br> • Chart type classification (bar/line/pie/flow) <br> • Axis detection & scale extraction <br> • Legend detection <br> • Color-based series separation |
+| **Model / Engine** | • Chart → data: DePlot (Google), MatCha, ChartOCR, UniChart <br> • VLM: GPT-4o, Claude Vision (describe/summarize) <br> • Flowchart: node detection + edge detection → graph <br> • Bar/Line: element detection → value mapping <br> • Pie: segment angle measurement |
+| **Post-processing** | • Data table reconstruction (CSV/JSON) <br> • Axis label → data mapping <br> • Chart summarization (text description) <br> • Flowchart → Mermaid/DOT conversion <br> • Output: data table hoặc structured description |
 
 > **Năng lực tổ chức:** CV cao (chart element detection), ML Engineering cao, Domain Knowledge (hiểu chart types), NLP (cho chart summarization via VLM)
 

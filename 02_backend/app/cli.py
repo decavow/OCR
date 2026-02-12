@@ -69,9 +69,6 @@ def demote(email: str):
 
         user.is_admin = False
         db.flush()
-        print(f"User '{email}' demoted to regular user.")
-
-
 def main():
     if len(sys.argv) < 3:
         print("Usage:")

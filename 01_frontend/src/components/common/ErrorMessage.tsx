@@ -1,3 +1,6 @@
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button as ShadcnButton } from '@/components/ui/button'
+
 interface ErrorMessageProps {
   message: string
   onRetry?: () => void
@@ -5,9 +8,15 @@ interface ErrorMessageProps {
 
 export default function ErrorMessage({ message, onRetry }: ErrorMessageProps) {
   return (
-    <div className="error-message">
-      <span>{message}</span>
-      {onRetry && <button onClick={onRetry}>Retry</button>}
-    </div>
+    <Alert variant="destructive">
+      <AlertDescription className="flex items-center justify-between">
+        <span>{message}</span>
+        {onRetry && (
+          <ShadcnButton variant="outline" size="sm" onClick={onRetry}>
+            Retry
+          </ShadcnButton>
+        )}
+      </AlertDescription>
+    </Alert>
   )
 }

@@ -23,7 +23,11 @@
       "Bash(docker ps:*)",
       "Bash(timeout:*)",
       "Bash(git restore:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(del \"c:\\\\Projects\\\\OCR\\\\01_frontend\\\\src\\\\styles\\\\variables.css\")",
+      "Bash(npx tailwindcss --help:*)",
+      "Bash(npx vite build)"
     ]
   }
 }

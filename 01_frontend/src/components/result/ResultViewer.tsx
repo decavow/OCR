@@ -6,7 +6,6 @@ import FileNavigator from './FileNavigator'
 import TextCursor from './TextCursor'
 import { JobResult, FileInfo } from '../../types'
 
-// Main split-panel component: Left = OriginalPreview, Right = ExtractedText
 interface ResultViewerProps {
   file: FileInfo
   result: JobResult | null
@@ -26,9 +25,8 @@ export default function ResultViewer({
   onNext,
   onBack,
 }: ResultViewerProps) {
-  // TODO: Implement split-panel layout
   return (
-    <div className="result-viewer">
+    <div className="flex flex-col h-full">
       <FileNavigator
         fileName={file.original_name}
         currentIndex={currentIndex}
@@ -38,12 +36,12 @@ export default function ResultViewer({
         onBack={onBack}
       />
 
-      <div className="split-panel">
-        <div className="left-panel">
+      <div className="flex flex-1 gap-4 overflow-hidden mt-3">
+        <div className="flex-1 flex flex-col bg-card border border-border rounded-md overflow-hidden">
           <OriginalPreview fileId={file.id} />
         </div>
 
-        <div className="right-panel">
+        <div className="flex-1 flex flex-col bg-card border border-border rounded-md overflow-hidden">
           <ResultToolbar fileId={file.id} />
           {result && (
             <>

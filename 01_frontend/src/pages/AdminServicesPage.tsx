@@ -8,17 +8,33 @@ import {
   deleteServiceType,
   ServiceType,
 } from '../api/admin'
+import { Button as ShadcnButton } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
+import { RefreshCw } from 'lucide-react'
+import Loading from '../components/common/Loading'
 
 const STATUS_FILTERS = ['ALL', 'PENDING', 'APPROVED', 'DISABLED', 'REJECTED'] as const
 
-function getStatusClass(status: string): string {
-  switch (status) {
-    case 'APPROVED': return 'status-badge completed'
-    case 'PENDING': return 'status-badge pending'
-    case 'DISABLED': return 'status-badge cancelled'
-    case 'REJECTED': return 'status-badge failed'
-    default: return 'status-badge'
-  }
+const statusStyles: Record<string, string> = {
+  APPROVED: 'bg-success/20 text-success',
+  PENDING: 'bg-warning/20 text-warning',
+  DISABLED: 'bg-muted text-muted-foreground',
+  REJECTED: 'bg-destructive/20 text-destructive',
 }
 
 function getInstanceSummary(instanceCount: Record<string, number>): { text: string; cls: string } {
@@ -26,10 +42,10 @@ function getInstanceSummary(instanceCount: Record<string, number>): { text: stri
   const waiting = instanceCount['WAITING'] || 0
   const total = Object.values(instanceCount).reduce((a, b) => a + b, 0)
 
-  if (active > 0) return { text: `${active} running`, cls: 'instance-running' }
-  if (waiting > 0) return { text: `${waiting} waiting`, cls: 'instance-waiting' }
-  if (total === 0) return { text: 'No instances', cls: 'instance-none' }
-  return { text: `${total} stopped`, cls: 'instance-stopped' }
+  if (active > 0) return { text: `${active} running`, cls: 'text-success' }
+  if (waiting > 0) return { text: `${waiting} waiting`, cls: 'text-warning' }
+  if (total === 0) return { text: 'No instances', cls: 'text-muted-foreground' }
+  return { text: `${total} stopped`, cls: 'text-destructive' }
 }
 
 export default function AdminServicesPage() {
@@ -99,170 +115,173 @@ export default function AdminServicesPage() {
   const pendingCount = services.filter((s) => s.status === 'PENDING').length
 
   return (
-    <div className="admin-services-page">
-      <div className="admin-page-header">
+    <div>
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1>Service Management</h1>
-          <p className="admin-page-subtitle">
+          <h1 className="text-2xl font-bold text-foreground">Service Management</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             Manage OCR services, approve registrations, and control availability.
           </p>
         </div>
         {pendingCount > 0 && (
-          <span className="pending-count-badge">{pendingCount} pending approval</span>
+          <span className="inline-flex items-center rounded-full bg-warning/20 text-warning px-3 py-1 text-sm font-medium">
+            {pendingCount} pending approval
+          </span>
         )}
       </div>
 
-      {error && <div className="error-message">{error}</div>}
+      {error && (
+        <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md p-3 mb-4">
+          {error}
+        </div>
+      )}
 
       {/* Filter bar */}
-      <div className="admin-filter-bar">
+      <div className="flex items-center gap-2 mb-4">
         {STATUS_FILTERS.map((s) => (
-          <button
+          <ShadcnButton
             key={s}
-            className={`filter-btn ${filter === s ? 'active' : ''}`}
+            variant={filter === s ? 'default' : 'secondary'}
+            size="sm"
             onClick={() => setFilter(s)}
           >
             {s === 'ALL' ? 'All' : s.charAt(0) + s.slice(1).toLowerCase()}
-          </button>
+          </ShadcnButton>
         ))}
-        <button className="filter-btn refresh-btn" onClick={fetchServices} disabled={loading}>
-          Refresh
-        </button>
+        <ShadcnButton variant="ghost" size="sm" onClick={fetchServices} disabled={loading}>
+          <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+        </ShadcnButton>
       </div>
 
       {/* Service table */}
       {loading ? (
-        <div className="loading">Loading services...</div>
+        <Loading text="Loading services..." />
       ) : services.length === 0 ? (
-        <div className="empty-state">No services found.</div>
+        <div className="text-center py-12 text-muted-foreground">No services found.</div>
       ) : (
-        <div className="admin-table-wrapper">
-          <table className="data-table admin-table">
-            <thead>
-              <tr>
-                <th>Service</th>
-                <th>Methods / Tiers</th>
-                <th>Instances</th>
-                <th>Status</th>
-                <th>Approved By</th>
-                <th className="actions-col">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="rounded-md border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Service</TableHead>
+                <TableHead>Methods / Tiers</TableHead>
+                <TableHead>Instances</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Approved By</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {services.map((svc) => {
                 const inst = getInstanceSummary(svc.instance_count)
                 const isLoading = actionLoading === svc.id
                 return (
-                  <tr key={svc.id} className={svc.status === 'PENDING' ? 'pending-row' : ''}>
-                    <td>
-                      <div className="svc-name">{svc.display_name}</div>
-                      <code className="svc-id">{svc.id}</code>
-                    </td>
-                    <td>
-                      <div className="svc-tags">
+                  <TableRow key={svc.id} className={svc.status === 'PENDING' ? 'bg-warning/5' : ''}>
+                    <TableCell>
+                      <div className="text-sm font-medium text-foreground">{svc.display_name}</div>
+                      <code className="text-xs text-muted-foreground">{svc.id}</code>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
                         {svc.allowed_methods.map((m) => (
-                          <span key={m} className="svc-tag method-tag">{m}</span>
+                          <span key={m} className="inline-flex items-center rounded bg-primary/20 text-primary px-1.5 py-0.5 text-xs">
+                            {m}
+                          </span>
                         ))}
                         {svc.allowed_tiers.map((t) => (
-                          <span key={t} className="svc-tag tier-tag">tier {t}</span>
+                          <span key={t} className="inline-flex items-center rounded bg-muted text-muted-foreground px-1.5 py-0.5 text-xs">
+                            tier {t}
+                          </span>
                         ))}
                       </div>
-                    </td>
-                    <td>
-                      <span className={`instance-badge ${inst.cls}`}>{inst.text}</span>
-                    </td>
-                    <td>
-                      <span className={getStatusClass(svc.status)}>{svc.status}</span>
-                    </td>
-                    <td className="approved-by-cell">
+                    </TableCell>
+                    <TableCell>
+                      <span className={cn('text-sm font-medium', inst.cls)}>{inst.text}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className={cn(
+                        'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
+                        statusStyles[svc.status] || 'bg-muted text-muted-foreground'
+                      )}>
+                        {svc.status}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
                       {svc.approved_by || '-'}
-                    </td>
-                    <td className="actions-col">
-                      <div className="action-buttons">
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
                         {svc.status === 'PENDING' && (
                           <>
-                            <button
-                              className="action-btn approve-btn"
-                              onClick={() => handleApprove(svc.id)}
-                              disabled={isLoading}
-                            >
+                            <ShadcnButton size="sm" onClick={() => handleApprove(svc.id)} disabled={isLoading}>
                               Approve
-                            </button>
-                            <button
-                              className="action-btn reject-btn"
+                            </ShadcnButton>
+                            <ShadcnButton
+                              variant="destructive"
+                              size="sm"
                               onClick={() => setRejectModal({ id: svc.id, name: svc.display_name })}
                               disabled={isLoading}
                             >
                               Reject
-                            </button>
+                            </ShadcnButton>
                           </>
                         )}
                         {svc.status === 'APPROVED' && (
-                          <button
-                            className="action-btn disable-btn"
-                            onClick={() => handleDisable(svc.id)}
-                            disabled={isLoading}
-                          >
+                          <ShadcnButton variant="secondary" size="sm" onClick={() => handleDisable(svc.id)} disabled={isLoading}>
                             Disable
-                          </button>
+                          </ShadcnButton>
                         )}
                         {svc.status === 'DISABLED' && (
-                          <button
-                            className="action-btn enable-btn"
-                            onClick={() => handleEnable(svc.id)}
-                            disabled={isLoading}
-                          >
+                          <ShadcnButton variant="secondary" size="sm" onClick={() => handleEnable(svc.id)} disabled={isLoading}>
                             Enable
-                          </button>
+                          </ShadcnButton>
                         )}
                         {(svc.status === 'REJECTED' || svc.status === 'DISABLED') && (
-                          <button
-                            className="action-btn delete-btn"
-                            onClick={() => handleDelete(svc.id, svc.display_name)}
-                            disabled={isLoading}
-                          >
+                          <ShadcnButton variant="destructive" size="sm" onClick={() => handleDelete(svc.id, svc.display_name)} disabled={isLoading}>
                             Delete
-                          </button>
+                          </ShadcnButton>
                         )}
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 )
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
 
       {/* Reject Modal */}
-      {rejectModal && (
-        <div className="modal-overlay" onClick={() => setRejectModal(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>Reject "{rejectModal.name}"</h3>
-            <p className="modal-hint">This is a terminal action. The service must be deleted and re-registered to try again.</p>
-            <div className="form-group">
-              <label htmlFor="reject-reason">Reason</label>
-              <textarea
-                id="reject-reason"
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="Provide a reason for rejection..."
-                rows={3}
-              />
-            </div>
-            <div className="modal-actions">
-              <button className="action-btn" onClick={() => setRejectModal(null)}>Cancel</button>
-              <button
-                className="action-btn reject-btn"
-                onClick={handleReject}
-                disabled={!rejectReason.trim() || actionLoading === rejectModal.id}
-              >
-                Reject Service
-              </button>
-            </div>
+      <Dialog open={!!rejectModal} onOpenChange={(open) => !open && setRejectModal(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject "{rejectModal?.name}"</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This is a terminal action. The service must be deleted and re-registered to try again.
+          </p>
+          <div className="space-y-2 mt-4">
+            <Label htmlFor="reject-reason">Reason</Label>
+            <textarea
+              id="reject-reason"
+              className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Provide a reason for rejection..."
+            />
           </div>
-        </div>
-      )}
+          <div className="flex justify-end gap-2 mt-4">
+            <ShadcnButton variant="secondary" onClick={() => setRejectModal(null)}>Cancel</ShadcnButton>
+            <ShadcnButton
+              variant="destructive"
+              onClick={handleReject}
+              disabled={!rejectReason.trim() || actionLoading === rejectModal?.id}
+            >
+              Reject Service
+            </ShadcnButton>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

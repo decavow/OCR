@@ -12,6 +12,9 @@ import UploadPage from './pages/UploadPage'
 import SettingsPage from './pages/SettingsPage'
 import NotFoundPage from './pages/NotFoundPage'
 import AdminServicesPage from './pages/AdminServicesPage'
+import AdminDashboardPage from './pages/AdminDashboardPage'
+import AdminUsersPage from './pages/AdminUsersPage'
+import AdminSystemHealthPage from './pages/AdminSystemHealthPage'
 
 // Components
 import ProtectedRoute from './components/auth/ProtectedRoute'
@@ -40,7 +43,10 @@ function App() {
 
               {/* Admin routes */}
               <Route element={<AdminRoute />}>
+                <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
                 <Route path="/admin/services" element={<AdminServicesPage />} />
+                <Route path="/admin/users" element={<AdminUsersPage />} />
+                <Route path="/admin/system" element={<AdminSystemHealthPage />} />
               </Route>
             </Route>
           </Route>

@@ -1,9 +1,6 @@
-// Bottom bar: system status, OCR engine version
-
 export default function StatusBar() {
-  // TODO: Implement status bar
   return (
-    <footer className="status-bar">
+    <footer className="h-8 px-4 flex items-center text-xs text-muted-foreground border-t border-border bg-card">
       {/* System status: Online/Offline */}
       {/* OCR engine version */}
     </footer>

@@ -44,3 +44,17 @@ class UserRepository(BaseRepository[User]):
         """Soft delete user."""
         user.deleted_at = datetime.now(timezone.utc)
         return self.update(user)
+
+    def count_active(self, exclude_admins: bool = False) -> int:
+        """Count all active users."""
+        query = self.db.query(User).filter(User.deleted_at.is_(None))
+        if exclude_admins:
+            query = query.filter(User.is_admin.is_(False))
+        return query.count()
+
+    def get_all_active(self, skip: int = 0, limit: int = 100, exclude_admins: bool = False) -> list[User]:
+        """Get all active users with pagination."""
+        query = self.db.query(User).filter(User.deleted_at.is_(None))
+        if exclude_admins:
+            query = query.filter(User.is_admin.is_(False))
+        return query.order_by(User.created_at.desc()).offset(skip).limit(limit).all()

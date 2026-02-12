@@ -1,7 +1,7 @@
-// Drag-drop area with file picker
-
 import { useRef, useState, DragEvent, ChangeEvent } from 'react'
 import { ALLOWED_FILE_TYPES } from '../../config'
+import { cn } from '@/lib/utils'
+import { Upload } from 'lucide-react'
 
 interface DropZoneProps {
   onFilesSelected: (files: File[]) => void
@@ -14,9 +14,7 @@ export default function DropZone({ onFilesSelected, disabled }: DropZoneProps) {
 
   const handleDragOver = (e: DragEvent) => {
     e.preventDefault()
-    if (!disabled) {
-      setIsDragOver(true)
-    }
+    if (!disabled) setIsDragOver(true)
   }
 
   const handleDragLeave = (e: DragEvent) => {
@@ -27,22 +25,17 @@ export default function DropZone({ onFilesSelected, disabled }: DropZoneProps) {
   const handleDrop = (e: DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
-
     if (disabled) return
 
     const droppedFiles = Array.from(e.dataTransfer.files)
     const validFiles = droppedFiles.filter((file) =>
       ALLOWED_FILE_TYPES.includes(file.type)
     )
-    if (validFiles.length > 0) {
-      onFilesSelected(validFiles)
-    }
+    if (validFiles.length > 0) onFilesSelected(validFiles)
   }
 
   const handleClick = () => {
-    if (!disabled) {
-      inputRef.current?.click()
-    }
+    if (!disabled) inputRef.current?.click()
   }
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -54,7 +47,11 @@ export default function DropZone({ onFilesSelected, disabled }: DropZoneProps) {
 
   return (
     <div
-      className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${disabled ? 'disabled' : ''}`}
+      className={cn(
+        'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-all bg-card',
+        isDragOver ? 'border-primary bg-primary/5' : 'border-border',
+        disabled && 'opacity-50 cursor-not-allowed'
+      )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -66,13 +63,14 @@ export default function DropZone({ onFilesSelected, disabled }: DropZoneProps) {
         multiple
         accept={ALLOWED_FILE_TYPES.join(',')}
         onChange={handleFileChange}
-        style={{ display: 'none' }}
+        className="hidden"
       />
-      <div className="drop-zone-content">
-        <p className="drop-zone-title">
+      <div className="flex flex-col items-center gap-2">
+        <Upload className="h-10 w-10 text-muted-foreground" />
+        <p className="text-sm font-medium text-foreground">
           {isDragOver ? 'Drop files here' : 'Drag & drop files or click to browse'}
         </p>
-        <p className="drop-zone-hint">
+        <p className="text-xs text-muted-foreground">
           Supported: JPEG, PNG, TIFF, PDF (max 50MB each)
         </p>
       </div>

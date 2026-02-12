@@ -1,11 +1,14 @@
-// Single batch: file list + statuses
-
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import BatchStatus from '../components/batch/BatchStatus'
+import JobStatus from '../components/job/JobStatus'
 import { Job } from '../types'
 import { getBatch, cancelBatch, BatchDetail } from '../api/batches'
 import { POLLING_INTERVAL } from '../config'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button as ShadcnButton } from '@/components/ui/button'
+import Loading from '../components/common/Loading'
+import ErrorMessage from '../components/common/ErrorMessage'
 
 export default function BatchDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -28,14 +31,11 @@ export default function BatchDetailPage() {
 
   useEffect(() => {
     fetchBatch()
-
-    // Poll for updates if batch is still processing
     const interval = setInterval(() => {
       if (batch && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(batch.status)) {
         fetchBatch()
       }
     }, POLLING_INTERVAL)
-
     return () => clearInterval(interval)
   }, [fetchBatch, batch?.status])
 
@@ -55,68 +55,61 @@ export default function BatchDetailPage() {
     }
   }
 
-  if (loading) return <div className="loading">Loading...</div>
-  if (error) return <div className="error-message">{error}</div>
-  if (!batch) return <div className="error-message">Batch not found</div>
+  if (loading) return <Loading text="Loading..." />
+  if (error) return <ErrorMessage message={error} />
+  if (!batch) return <ErrorMessage message="Batch not found" />
 
   return (
-    <div className="batch-detail-page">
-      <div className="page-header">
-        <h1>Batch Details</h1>
+    <div>
+      <div className="flex items-center gap-4 mb-6">
+        <h1 className="text-2xl font-bold text-foreground">Batch Details</h1>
         <BatchStatus status={batch.status} />
       </div>
 
-      <div className="batch-info">
-        <div className="info-item">
-          <span className="label">ID:</span>
-          <span className="value">{batch.id.slice(0, 8)}...</span>
-        </div>
-        <div className="info-item">
-          <span className="label">Files:</span>
-          <span className="value">
-            {batch.completed_files}/{batch.total_files} completed
-          </span>
-        </div>
-        <div className="info-item">
-          <span className="label">Format:</span>
-          <span className="value">{batch.output_format.toUpperCase()}</span>
-        </div>
-        <div className="info-item">
-          <span className="label">Created:</span>
-          <span className="value">
-            {new Date(batch.created_at).toLocaleString()}
-          </span>
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {[
+          { label: 'ID', value: `${batch.id.slice(0, 8)}...` },
+          { label: 'Files', value: `${batch.completed_files}/${batch.total_files} completed` },
+          { label: 'Format', value: batch.output_format.toUpperCase() },
+          { label: 'Created', value: new Date(batch.created_at).toLocaleString() },
+        ].map((item) => (
+          <Card key={item.label}>
+            <CardContent className="py-3 px-4">
+              <div className="text-xs text-muted-foreground">{item.label}</div>
+              <div className="text-sm font-medium text-foreground mt-1">{item.value}</div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      <div className="jobs-section">
-        <h2>Jobs</h2>
-        <div className="jobs-list">
+      <div className="mb-6">
+        <h2 className="text-lg font-semibold text-foreground mb-3">Jobs</h2>
+        <div className="flex flex-col gap-1 rounded-md border border-border overflow-hidden">
           {batch.jobs.map((job) => (
             <div
               key={job.id}
-              className={`job-item status-${job.status.toLowerCase()}`}
+              className="flex items-center justify-between py-3 px-4 hover:bg-muted transition-colors"
               onClick={() => handleJobSelect(job)}
               style={{ cursor: job.status === 'COMPLETED' ? 'pointer' : 'default' }}
             >
-              <span className="job-file">File {job.file_id.slice(0, 8)}...</span>
-              <span className={`job-status ${job.status.toLowerCase()}`}>
-                {job.status}
+              <span className="text-sm font-mono text-foreground">
+                File {job.file_id.slice(0, 8)}...
               </span>
-              {job.processing_time_ms && (
-                <span className="job-time">{job.processing_time_ms}ms</span>
-              )}
+              <div className="flex items-center gap-3">
+                <JobStatus status={job.status} />
+                {job.processing_time_ms && (
+                  <span className="text-xs text-muted-foreground">{job.processing_time_ms}ms</span>
+                )}
+              </div>
             </div>
           ))}
         </div>
       </div>
 
       {batch.status === 'PROCESSING' && (
-        <div className="batch-actions">
-          <button className="danger" onClick={handleCancel}>
-            Cancel Batch
-          </button>
-        </div>
+        <ShadcnButton variant="destructive" onClick={handleCancel}>
+          Cancel Batch
+        </ShadcnButton>
       )}
     </div>
   )

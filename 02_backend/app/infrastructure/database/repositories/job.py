@@ -1,7 +1,7 @@
 # JobRepository
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
@@ -130,6 +130,54 @@ class JobRepository(BaseRepository[Job]):
         """Set result path for completed job."""
         job.result_path = result_path
         return self.update(job)
+
+    def count_all_active(self) -> int:
+        """Count all active jobs."""
+        return self.db.query(Job).filter(
+            Job.deleted_at.is_(None)
+        ).count()
+
+    def count_all_by_status(self, status: str) -> int:
+        """Count all jobs with given status."""
+        return self.db.query(Job).filter(
+            Job.status == status,
+            Job.deleted_at.is_(None)
+        ).count()
+
+    def avg_processing_time(self) -> float | None:
+        """Average processing time in ms for completed jobs."""
+        from sqlalchemy import func
+        result = self.db.query(func.avg(Job.processing_time_ms)).filter(
+            Job.status == "COMPLETED",
+            Job.processing_time_ms.isnot(None),
+            Job.deleted_at.is_(None)
+        ).scalar()
+        return float(result) if result else None
+
+    def get_hourly_volume(self, hours: int = 24) -> list[dict]:
+        """Get job volume grouped by hour for the last N hours."""
+        from sqlalchemy import func
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        rows = self.db.query(
+            func.strftime('%H', Job.created_at).label('hour'),
+            func.count(Job.id).label('volume'),
+            func.avg(Job.processing_time_ms).label('avg_latency'),
+        ).filter(
+            Job.created_at >= cutoff,
+            Job.deleted_at.is_(None)
+        ).group_by(
+            func.strftime('%H', Job.created_at)
+        ).order_by('hour').all()
+
+        return [
+            {
+                "hour": f"{row.hour}:00",
+                "volume": row.volume,
+                "avg_latency_ms": round(float(row.avg_latency or 0), 1),
+            }
+            for row in rows
+        ]
 
     def cancel_jobs(self, jobs: List[Job]) -> int:
         """Cancel multiple jobs. Returns cancelled count."""
