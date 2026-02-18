@@ -202,6 +202,7 @@ class ServiceType(Base):
     access_key: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
     allowed_methods: Mapped[str] = mapped_column(Text, default='["text_raw"]')  # JSON array
     allowed_tiers: Mapped[str] = mapped_column(Text, default='[0]')  # JSON array
+    supported_output_formats: Mapped[str] = mapped_column(Text, default='["txt","json"]')  # JSON array
     engine_info: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON {name, version, capabilities}
     dev_contact: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Dev email/contact
     max_instances: Mapped[int] = mapped_column(Integer, default=0)  # 0 = unlimited

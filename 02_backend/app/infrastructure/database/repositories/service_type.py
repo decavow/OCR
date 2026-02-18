@@ -58,6 +58,7 @@ class ServiceTypeRepository(BaseRepository[ServiceType]):
         dev_contact: Optional[str] = None,
         status: str = ServiceTypeStatus.PENDING,
         access_key: Optional[str] = None,
+        supported_output_formats: Optional[List[str]] = None,
     ) -> ServiceType:
         """
         Create new service type or update existing one.
@@ -74,6 +75,8 @@ class ServiceTypeRepository(BaseRepository[ServiceType]):
                 existing.allowed_methods = json.dumps(allowed_methods)
             if allowed_tiers is not None:
                 existing.allowed_tiers = json.dumps(allowed_tiers)
+            if supported_output_formats is not None:
+                existing.supported_output_formats = json.dumps(supported_output_formats)
             if engine_info is not None:
                 existing.engine_info = json.dumps(engine_info)
             if dev_contact is not None:
@@ -95,6 +98,7 @@ class ServiceTypeRepository(BaseRepository[ServiceType]):
             access_key=access_key,
             allowed_methods=json.dumps(allowed_methods or ["text_raw"]),
             allowed_tiers=json.dumps(allowed_tiers or [0]),
+            supported_output_formats=json.dumps(supported_output_formats or ["txt", "json"]),
             engine_info=json.dumps(engine_info) if engine_info else None,
             dev_contact=dev_contact,
         )
@@ -113,6 +117,7 @@ class ServiceTypeRepository(BaseRepository[ServiceType]):
         allowed_tiers: Optional[List[int]] = None,
         engine_info: Optional[dict] = None,
         dev_contact: Optional[str] = None,
+        supported_output_formats: Optional[List[str]] = None,
     ) -> ServiceType:
         """
         Register a new service type (from worker registration).
@@ -132,6 +137,7 @@ class ServiceTypeRepository(BaseRepository[ServiceType]):
             dev_contact=dev_contact,
             status=ServiceTypeStatus.PENDING,
             access_key=None,
+            supported_output_formats=supported_output_formats,
         )
 
     def approve(self, service_type: ServiceType, approved_by: Optional[str] = None) -> ServiceType:

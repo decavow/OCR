@@ -1,15 +1,19 @@
 # OCR Worker - Tesseract (CPU-only, lightweight)
 #
+# Prerequisites: build base image first
+#   cd 03_worker && make build-base-cpu
+#
 # Usage (from project root):
-#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml up -d
-#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml up -d --scale worker-tesseract=3
-#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml down
+#   docker-compose -f 03_worker/deploy/tesseract-cpu/docker-compose.yml up -d
+#   docker-compose -f 03_worker/deploy/tesseract-cpu/docker-compose.yml up -d --scale worker-tesseract=3
+#   docker-compose -f 03_worker/deploy/tesseract-cpu/docker-compose.yml down
 
 services:
   worker-tesseract:
     build:
       context: ../..
-      dockerfile: Dockerfile.cpu
+      dockerfile: deploy/tesseract-cpu/Dockerfile
+    image: ocr-worker-tesseract:latest
     env_file:
       - ../../../.env
       - .env

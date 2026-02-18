@@ -37,7 +37,7 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 | **Service Model** | Single `Service` table | **`ServiceType` + `ServiceInstance`** two-level model |
 | **Service Status** | enabled (bool) | **PENDING/APPROVED/DISABLED/REJECTED** (admin workflow) |
 | **Worker Identity** | `WORKER_SERVICE_ID` | **`WORKER_SERVICE_TYPE` + auto-generated instance_id** |
-| **Worker Engines** | Tesseract only | **PaddleOCR (GPU) + Tesseract (CPU)** |
+| **Worker Engines** | Tesseract only | **PaddleOCR (GPU) + Tesseract (CPU) + PaddleOCR-VL (GPU, structured)** |
 | **Worker Deploy** | In root docker-compose | **Separate compose per engine** in `03_worker/deploy/` |
 | **Frontend in Compose** | Yes | **No** (separate deploy) |
 | **Session Token** | Session.id as token | **Session.token** (separate field) |
@@ -77,7 +77,8 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 │  PROCESSING LAYER                                               │
 │  └── OCR Workers — 03_worker/ — separate deploy per engine     │
 │      ├── PaddleOCR Worker (GPU) — deploy/paddle-text/          │
-│      └── Tesseract Worker (CPU) — deploy/tesseract-cpu/        │
+│      ├── Tesseract Worker (CPU) — deploy/tesseract-cpu/        │
+│      └── PaddleOCR-VL Worker (GPU) — deploy/paddle-vl/        │
 │      Each worker:                                               │
 │      ├── Self-registers on startup                             │
 │      ├── Pulls from NATS (specific subject)                    │
@@ -200,7 +201,7 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 ### Worker (Processing Layer)
 - [x] **NO MinIO credentials** (enforced)
 - [x] Self-registration on startup
-- [x] Multi-engine support (PaddleOCR + Tesseract)
+- [x] Multi-engine support (PaddleOCR + Tesseract + PaddleOCR-VL)
 - [x] Separate Dockerfiles (GPU + CPU)
 - [x] Separate deploy configs per engine
 - [x] NATS consumer (specific subject)
@@ -236,7 +237,7 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 | **MinIO in Edge Layer** | SA v3.1: "Edge layer luu tru file" |
 | **ServiceType + ServiceInstance** | Two-level model: admin manages types, system manages instances |
 | **Worker self-registration** | Workers register on startup, admin approves types |
-| **Multi-engine workers** | PaddleOCR (GPU) + Tesseract (CPU), separate deploys |
+| **Multi-engine workers** | PaddleOCR (GPU) + Tesseract (CPU) + PaddleOCR-VL (GPU, structured), separate deploys |
 | **Retry at Orchestrator** | Worker stateless, Orchestrator has full context |
 | **Worker no storage creds** | Layer separation, security |
 | **File Proxy POST methods** | Body contains job_id for proper ACL |
@@ -263,7 +264,7 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 | HEARTBEAT_INTERVAL_MS | 30000 |
 | HEARTBEAT_TIMEOUT_SECONDS | 90 |
 | SESSION_EXPIRE_HOURS | 24 |
-| DEFAULT_OUTPUT_FORMAT | txt |
+| DEFAULT_OUTPUT_FORMAT | txt (per-service: supported_output_formats) |
 | DEFAULT_RETENTION_HOURS | 168 (7 days) |
 | NATS_STREAM_NAME | OCR_JOBS |
 | NATS_DLQ_STREAM_NAME | OCR_DLQ |

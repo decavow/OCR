@@ -50,6 +50,7 @@ async def register_service(
             allowed_tiers=data.allowed_tiers,
             engine_info=data.engine_info,
             dev_contact=data.dev_contact,
+            supported_output_formats=data.supported_output_formats,
         )
 
     # Check if type is rejected

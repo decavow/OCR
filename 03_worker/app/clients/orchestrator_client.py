@@ -37,6 +37,7 @@ class OrchestratorClient:
         allowed_tiers: List[int],
         dev_contact: Optional[str] = None,
         engine_info: Optional[Dict[str, Any]] = None,
+        supported_output_formats: Optional[List[str]] = None,
     ) -> dict:
         """
         Register instance with backend.
@@ -58,6 +59,8 @@ class OrchestratorClient:
             payload["dev_contact"] = dev_contact
         if engine_info:
             payload["engine_info"] = engine_info
+        if supported_output_formats:
+            payload["supported_output_formats"] = supported_output_formats
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(

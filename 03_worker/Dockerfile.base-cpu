@@ -1,0 +1,38 @@
+# OCR Worker Base Image - CPU (Python 3.11 slim)
+#
+# Shared base for all CPU-only workers (Tesseract, etc.)
+# Contains: Python runtime, shared Python deps, app code, common env vars.
+# Does NOT contain engine-specific packages (pytesseract, etc.).
+#
+# Build:
+#   docker build -f Dockerfile.base-cpu -t ocr-worker-base-cpu:latest .
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install common system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install shared Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy shared application code
+COPY app/ ./app/
+
+# Common environment variables (can be overridden by per-worker .env)
+ENV OCR_LANG=en
+ENV LOG_LEVEL=INFO
+ENV NATS_URL=nats://ocr-nats:4222
+ENV FILE_PROXY_URL=http://ocr-backend:8000/api/v1/internal/file-proxy
+ENV ORCHESTRATOR_URL=http://ocr-backend:8000/api/v1/internal
+
+CMD ["python", "-m", "app.main"]

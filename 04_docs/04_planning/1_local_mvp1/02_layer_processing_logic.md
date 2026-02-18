@@ -70,11 +70,14 @@
 │  │   │                     OCR WORKERS (Multiple Engines)                     │  │  │
 │  │   │        (has access_key, NO storage credentials)                       │  │  │
 │  │   │                                                                       │  │  │
-│  │   │   ┌──────────────────────┐    ┌──────────────────────┐               │  │  │
-│  │   │   │  PaddleOCR Worker   │    │  Tesseract Worker    │               │  │  │
-│  │   │   │  (GPU - Dockerfile) │    │  (CPU - Dockerfile.cpu)│              │  │  │
-│  │   │   │  deploy/paddle-text/ │    │  deploy/tesseract-cpu/│              │  │  │
-│  │   │   └──────────────────────┘    └──────────────────────┘               │  │  │
+│  │   │   ┌──────────────────────┐  ┌──────────────────────┐  ┌────────────────────────┐│  │  │
+│  │   │   │  PaddleOCR Worker   │  │  Tesseract Worker    │  │  PaddleOCR-VL Worker   ││  │  │
+│  │   │   │  (GPU - Dockerfile) │  │  (CPU - Dockerfile   │  │  (GPU - Dockerfile)    ││  │  │
+│  │   │   │  deploy/paddle-text/│  │  .cpu)               │  │  deploy/paddle-vl/     ││  │  │
+│  │   │   │  method: text_raw   │  │  deploy/tesseract-cpu│  │  method:               ││  │  │
+│  │   │   │  formats: txt,json  │  │  method: text_raw    │  │   structured_extract   ││  │  │
+│  │   │   │                     │  │  formats: txt,json   │  │  formats: json,md      ││  │  │
+│  │   │   └──────────────────────┘  └──────────────────────┘  └────────────────────────┘│  │  │
 │  │   │                                                                       │  │  │
 │  │   │   Shared Flow:                                                        │  │  │
 │  │   │   ┌────────┐  ┌──────────┐  ┌───────────┐  ┌─────────────────┐      │  │  │
@@ -735,6 +738,8 @@
 │   │   with timeout(JOB_TIMEOUT_SECONDS):                                │   │
 │   │       # Engine dispatched based on service_type                     │   │
 │   │       # PaddleOCR: preprocessing -> paddle inference -> postprocess │   │
+│   │       # PaddleOCR-VL: preprocessing -> PP-Structure -> postprocess│   │
+│   │       #   (layout analysis + table recognition + OCR)             │   │
 │   │       # Tesseract: preprocessing -> tesseract OCR -> postprocess    │   │
 │   │       result = engine.process(input_file)                           │   │
 │   │                                                                      │   │
@@ -1128,7 +1133,7 @@
 - *Added Section 3.7: Worker Registration Flow (self-registration on startup)*
 - *Added Section 3.8: Admin Service Management Flow (approve/reject/disable)*
 - *Added Section 5.2: Worker Registration Sequence Diagram*
-- *Updated Processing Layer: multi-engine support (PaddleOCR + Tesseract)*
+- *Updated Processing Layer: multi-engine support (PaddleOCR + Tesseract + PaddleOCR-VL)*
 - *Updated heartbeat to use `instance_id` instead of `service_id`*
 - *Updated auth flow: Session.token is separate field, User has is_admin*
 - *Updated File Proxy ACL: validates against ServiceType (not Service)*

@@ -89,6 +89,7 @@ class OCRWorker:
             engine_info=self.processor.get_engine_info()
             if hasattr(self.processor, "get_engine_info")
             else None,
+            supported_output_formats=settings.worker_supported_formats,
         )
 
     def _set_access_key(self, key: str) -> None:
@@ -213,9 +214,13 @@ class OCRWorker:
             logger.info(f"OCR complete, result size: {len(result)} bytes")
 
             # Determine result content type
-            result_content_type = (
-                "application/json" if job["output_format"] == "json" else "text/plain"
-            )
+            fmt = job["output_format"]
+            if fmt == "json":
+                result_content_type = "application/json"
+            elif fmt == "md":
+                result_content_type = "text/markdown"
+            else:
+                result_content_type = "text/plain"
 
             # Upload result via File Proxy
             logger.debug("Uploading result")

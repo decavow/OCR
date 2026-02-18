@@ -20,6 +20,7 @@ class AvailableServiceResponse(BaseModel):
     description: str | None
     allowed_methods: List[str]
     allowed_tiers: List[int]
+    supported_output_formats: List[str]
     active_instances: int
 
 
@@ -58,6 +59,7 @@ async def list_available_services(
             description=st.description,
             allowed_methods=json.loads(st.allowed_methods),
             allowed_tiers=json.loads(st.allowed_tiers),
+            supported_output_formats=json.loads(st.supported_output_formats),
             active_instances=active_count,
         ))
 

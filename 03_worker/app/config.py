@@ -49,6 +49,11 @@ class Settings:
         tiers_str = os.getenv("WORKER_ALLOWED_TIERS", "0")
         return [int(t.strip()) for t in tiers_str.split(",") if t.strip()]
 
+    @property
+    def worker_supported_formats(self) -> List[str]:
+        formats_str = os.getenv("WORKER_SUPPORTED_FORMATS", "txt,json")
+        return [f.strip() for f in formats_str.split(",") if f.strip()]
+
     # Connections (NO MINIO_* variables!)
     nats_url: str = os.getenv("NATS_URL", "nats://nats:4222")
     file_proxy_url: str = os.getenv(

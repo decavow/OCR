@@ -1,9 +1,8 @@
 # UploadConfig (output_format, retention_hours)
 
 from pydantic import BaseModel
-from typing import Literal
 
 
 class UploadConfig(BaseModel):
-    output_format: Literal["txt", "json"] = "txt"
+    output_format: str = "txt"  # Validated dynamically via services
     retention_hours: int = 168  # 1 week default

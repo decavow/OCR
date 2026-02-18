@@ -76,8 +76,9 @@ def seed_services(seed_config: str) -> None:
     NOTE: Seed services are a DEV CONVENIENCE for local development.
     In production, workers register dynamically and admin approves.
 
-    Format: type_id:access_key:methods:tiers;...
-    Example: ocr-text-tier0:sk_local_text_tier0:text_raw:0;ocr-table-tier0:sk_table:table:0
+    Format: type_id:access_key:methods:tiers[:formats];...
+    Example: ocr-text-tier0:sk_local_text_tier0:text_raw:0
+             ocr-paddle-vl:sk_local_paddle_vl:structured_extract:0:json,md,txt
 
     Seeded types are pre-approved with access_key already set.
     """
@@ -92,13 +93,14 @@ def seed_services(seed_config: str) -> None:
 
             parts = entry.split(":")
             if len(parts) < 4:
-                logger.warning(f"Invalid seed entry (expected type_id:access_key:methods:tiers): {entry}")
+                logger.warning(f"Invalid seed entry (expected type_id:access_key:methods:tiers[:formats]): {entry}")
                 continue
 
             type_id = parts[0]
             access_key = parts[1]
             methods = parts[2].split(",")
             tiers = [int(t) for t in parts[3].split(",")]
+            formats = parts[4].split(",") if len(parts) > 4 else ["txt", "json"]
 
             service_type_repo.create_or_update(
                 type_id=type_id,
@@ -106,6 +108,7 @@ def seed_services(seed_config: str) -> None:
                 description="Auto-seeded for local development",
                 allowed_methods=methods,
                 allowed_tiers=tiers,
+                supported_output_formats=formats,
                 status=ServiceTypeStatus.APPROVED,  # Pre-approved
                 access_key=access_key,              # Pre-set key
             )

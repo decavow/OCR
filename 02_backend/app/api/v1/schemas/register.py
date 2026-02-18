@@ -12,6 +12,7 @@ class ServiceRegistrationRequest(BaseModel):
     description: Optional[str] = None
     allowed_methods: List[str] = ["text_raw"]
     allowed_tiers: List[int] = [0]
+    supported_output_formats: List[str] = ["txt", "json"]
     engine_info: Optional[Dict[str, Any]] = None  # {name, version, capabilities}
     dev_contact: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None  # {hostname, engine_version, ...}

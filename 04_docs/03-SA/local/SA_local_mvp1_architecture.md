@@ -41,7 +41,7 @@ Phạm vi kiến trúc bao gồm: React frontend và MinIO object storage ở Ed
 |---|---|
 | **Production Parity** | Demo phải mirror production architecture nhiều nhất có thể. Sử dụng production-grade components (NATS, MinIO) thay vì mock/in-memory. Đảm bảo cùng code chạy được ở cả local và cloud. Data flow pattern (Worker → File Proxy → Storage) giống production. |
 | **No Layer Bypassing** | Mỗi layer chỉ giao tiếp trực tiếp với layer liền kề, không vượt cấp. Worker (Processing) KHÔNG truy cập trực tiếp Storage (Edge). Mọi file access từ Processing layer phải qua File Proxy (Orchestration). Orchestration layer giao tiếp với Edge layer để access Storage. |
-| **Multi-Service Ready** | Architecture thiết kế để add thêm OCR services (table, handwriting, etc.) mà không cần refactor. Subject-based queue routing với required filters. Mỗi service có worker riêng với access_key. |
+| **Multi-Service Ready** | Architecture thiết kế để add thêm OCR services (table, handwriting, structured extract, etc.) mà không cần refactor. Subject-based queue routing với required filters. Mỗi service có worker riêng với access_key. Workers declare `supported_output_formats` at registration for dynamic format discovery. |
 | **Layer Separation** | 3 layers rõ ràng: Edge (API + Frontend + Object Storage), Orchestration (Job Management + File Proxy + Queue + Database), Processing (OCR Workers). Mỗi layer có trách nhiệm riêng biệt, giao tiếp qua well-defined interfaces. |
 | **Fail-Safe Processing** | Mọi job failure phải được handle gracefully. Retry mechanism với exponential backoff tại tầng orchestrator. Error classification để phân biệt retriable vs non-retriable errors. Dead letter queue cho jobs vượt quá max retries. |
 | **Soft Delete Everything** | Không hard delete ngay — files move to deleted bucket, metadata giữ `deleted_at`. Users có thể recover trong 7 ngày. Audit trail preserved. |
@@ -413,7 +413,8 @@ Trong đó:
 - tier: Infrastructure tier (tier0=local, tier1=cloud, etc.)
 
 Phase 1:
-- ocr.text_raw.tier0        → OCR text extraction trên local
+- ocr.text_raw.tier0             → OCR text extraction trên local
+- ocr.structured_extract.tier0   → Structured data extraction (tables, layouts) trên local
 
 Phase 2+:
 - ocr.table.tier1           → OCR table extraction trên cloud
@@ -440,6 +441,7 @@ Mỗi worker subscribe với filter **cụ thể** — không dùng wildcards:
 | Worker | Subscribe Subject | Description |
 |---|---|---|
 | `worker-ocr-text-tier0` | `ocr.text_raw.tier0` | OCR text extraction local |
+| `worker-ocr-structured-tier0` | `ocr.structured_extract.tier0` | Structured data extraction local (PaddleOCR-VL) |
 | `worker-ocr-table-tier0` | `ocr.table.tier0` | OCR table extraction local (Phase 2) |
 | `worker-ocr-text-tier1` | `ocr.text_raw.tier1` | OCR text extraction cloud (Phase 2) |
 
@@ -569,7 +571,7 @@ jobs = queue.pull(filter="ocr.table.tier1", max_messages=10, max_bytes=200MB)
 | **MinIO** | Object Storage (S3-compatible) | **Edge** | MinIO là thành phần lưu trữ file, thuộc Edge layer theo requirement: "Edge layer nhận request từ client, lưu trữ file (object storage)." S3-compatible API đảm bảo cùng code chạy được với AWS S3, Cloudflare R2 ở Phase 2. Soft delete với versioning. Web console (port 9001) để debug. **Chỉ** Edge layer (API Server) và File Proxy (Orchestration, via credentials) access trực tiếp. Worker KHÔNG access. |
 | **SQLite + WAL mode** | Relational Database | Orchestration | SQLite cho metadata storage. Zero configuration. **WAL mode** enable concurrent writes (~100 writes/sec, đủ cho 5+ workers). SQL-compatible nên migrate sang PostgreSQL ở Phase 2 dễ dàng. Database thuộc Orchestration layer vì lưu trữ metadata nghiệp vụ (jobs, requests, users). |
 | **NATS JetStream** | Message Queue + DLQ | Orchestration | NATS JetStream cho job dispatching. Native subject-based routing (`ocr.text_raw.tier0`). Lightweight (~50MB RAM). Message persistence. Dead letter queue support. Thuộc Orchestration layer vì chức năng điều phối jobs. |
-| **OCR Engine** | Text Extraction | Processing | Pluggable OCR engine chạy trong Worker container. Phase 1 hỗ trợ nhiều options: Tesseract (CPU, default), PaddleOCR (GPU), EasyOCR (GPU). Xem chi tiết tại Section 3.2. |
+| **OCR Engine** | Text Extraction & Structured Extract | Processing | Pluggable OCR engine chạy trong Worker container. Phase 1 hỗ trợ nhiều options: Tesseract (CPU, default), PaddleOCR (GPU), PaddleOCR-VL/PP-Structure (GPU, structured), EasyOCR (GPU). Xem chi tiết tại Section 3.2. |
 | **bcrypt** | Password Hashing | Orchestration | bcrypt standard cho password hashing. Cost factor = 10. |
 | **Docker + Docker Compose** | Container Orchestration | All | Docker Compose chạy toàn bộ stack. Mỗi component là container riêng. Volume mounts cho development. |
 
@@ -585,7 +587,8 @@ Phase 1 hỗ trợ nhiều OCR engines, cho phép chọn engine phù hợp với
 | Engine | Hardware | Accuracy | Speed | Vietnamese | Docker Image Size | Use Case |
 |--------|----------|----------|-------|------------|-------------------|----------|
 | **Tesseract 5.x** | CPU only | Medium | Slow | ✅ Good | ~500MB | Default. Low cost, simple deployment. |
-| **PaddleOCR** | GPU (CUDA) / CPU fallback | High | Fast | ✅ Excellent | ~3GB | High accuracy, table detection, batch processing. |
+| **PaddleOCR** | GPU (CUDA) / CPU fallback | High | Fast | ✅ Excellent | ~3GB | High accuracy, text extraction, batch processing. |
+| **PaddleOCR-VL (PP-Structure)** | GPU (CUDA) | High | Medium | ✅ Excellent | ~4GB | Structured data extraction: layout analysis, table recognition, form parsing. Output: json, md. |
 | **EasyOCR** | GPU (CUDA) / CPU fallback | High | Medium | ✅ Good | ~2GB | Easy setup, 80+ languages. |
 
 **Engine Selection:**
@@ -648,7 +651,7 @@ class OCREngine(Protocol):
 | Local development, no GPU | Tesseract |
 | Production với GPU, tiếng Việt | PaddleOCR |
 | Quick setup, multi-language | EasyOCR |
-| Table/document structure extraction | PaddleOCR |
+| Table/document structure extraction | PaddleOCR-VL (PP-Structure) |
 
 ---
 
@@ -738,7 +741,7 @@ class OCREngine(Protocol):
 | user_id | TEXT | FK → users.id |
 | method | TEXT | OCR method (e.g., `text_raw`) |
 | tier | INTEGER | Infrastructure tier (e.g., 0) |
-| output_format | TEXT | Requested output format (e.g., `txt`, `json`) |
+| output_format | TEXT | Requested output format (e.g., `txt`, `json`, `md`). Available formats depend on service's `supported_output_formats`. |
 | retention_hours | INTEGER | File retention (default 24) |
 | status | TEXT | Request status (aggregated from jobs) |
 | total_files | INTEGER | Total files in batch |
@@ -793,6 +796,7 @@ class OCREngine(Protocol):
 | access_key | TEXT | Unique key for authentication with File Proxy |
 | allowed_methods | TEXT (JSON) | Array of methods this service can handle |
 | allowed_tiers | TEXT (JSON) | Array of tiers this service can handle |
+| supported_output_formats | TEXT (JSON) | Array of output formats this service can produce (e.g. `["txt","json"]`, `["json","md"]`) |
 | enabled | BOOLEAN | Whether service is active |
 | created_at | TIMESTAMP | Registration time |
 

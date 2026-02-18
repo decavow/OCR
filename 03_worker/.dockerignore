@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+.dockerignore
+
+# Deploy configs (not needed inside image, except requirements.txt for per-worker builds)
+deploy/
+!deploy/*/requirements.txt
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+*.egg-info
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Dev tools
+setup_gpu.sh
+setup_gpu.bat
+Makefile
+*.md

@@ -1,0 +1,3 @@
+# PaddleOCR-VL engine dependencies (PPStructure included in paddleocr)
+paddlepaddle-gpu==2.6.1
+paddleocr==2.7.3

@@ -67,6 +67,7 @@ def _run_migrations() -> None:
 
     migrations = [
         "ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0",
+        'ALTER TABLE service_types ADD COLUMN supported_output_formats TEXT DEFAULT \'["txt","json"]\'',
     ]
 
     with engine.connect() as conn:

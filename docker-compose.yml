@@ -1,16 +1,17 @@
 # OCR Platform - Infrastructure + Backend
 #
 # This file contains only infrastructure and backend services.
-# Workers are managed separately - see worker/deploy/<name>/docker-compose.yml
+# Workers are managed separately - see 03_worker/Makefile
 #
 # Usage:
 #   docker-compose up -d                    # Start infrastructure + backend
 #   docker-compose logs -f backend          # View backend logs
 #   docker-compose down                     # Stop all
 #
-# Workers (each in worker/deploy/<name>/ folder):
-#   docker-compose -f worker/deploy/paddle-text/docker-compose.yml up -d      # PaddleOCR (GPU)
-#   docker-compose -f worker/deploy/tesseract-cpu/docker-compose.yml up -d    # Tesseract (CPU)
+# Workers (base image + per-worker layer, see 03_worker/Makefile):
+#   cd 03_worker && make up-paddle          # PaddleOCR (GPU)
+#   cd 03_worker && make up-tesseract       # Tesseract (CPU)
+#   cd 03_worker && make build-all          # Build all worker images
 
 services:
   # === INFRASTRUCTURE ===
@@ -48,7 +49,7 @@ services:
 
   # === BACKEND ===
   backend:
-    build: ./backend
+    build: ./02_backend
     container_name: ocr-backend
     ports:
       - "${BACKEND_PORT}:8000"

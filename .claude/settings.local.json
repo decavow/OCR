@@ -27,7 +27,10 @@
       "Bash(npx shadcn@latest add:*)",
       "Bash(del \"c:\\\\Projects\\\\OCR\\\\01_frontend\\\\src\\\\styles\\\\variables.css\")",
       "Bash(npx tailwindcss --help:*)",
-      "Bash(npx vite build)"
+      "Bash(npx vite build)",
+      "Bash(nvidia-smi:*)",
+      "Bash(lspci:*)",
+      "Bash(docker info:*)"
     ]
   }
 }

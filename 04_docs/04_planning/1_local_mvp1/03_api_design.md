@@ -204,7 +204,7 @@ Content-Type: multipart/form-data
 | `files` | File[] | Yes | Image/PDF files (max 20) |
 | `method` | string | No | OCR method (default: `text_raw`) |
 | `tier` | int | No | Processing tier (default: `0`) |
-| `output_format` | string | No | Output format: `txt`, `json` (default: `txt`) |
+| `output_format` | string | No | Output format: `txt`, `json`, `md` (default: `txt`). Available formats depend on selected service's `supported_output_formats`. |
 | `retention_hours` | int | No | File retention (default: 168 = 7 days) |
 
 **Response (201 Created):**
@@ -461,6 +461,7 @@ Authorization: Bearer {admin_token}
                 "access_key": null,
                 "allowed_methods": ["text_raw"],
                 "allowed_tiers": [0],
+                "supported_output_formats": ["txt", "json"],
                 "dev_contact": "dev@example.com",
                 "max_instances": 0,
                 "instance_count": 1,
@@ -536,7 +537,40 @@ GET /api/v1/services
 Authorization: Bearer {token}
 ```
 
-Returns list of available (APPROVED) service types for users.
+Returns list of available (APPROVED) service types that have at least one active worker instance.
+
+**Response (200 OK):**
+```json
+{
+    "success": true,
+    "data": {
+        "items": [
+            {
+                "id": "ocr-paddle",
+                "display_name": "PaddleOCR Text Raw",
+                "description": "GPU-accelerated OCR",
+                "allowed_methods": ["text_raw"],
+                "allowed_tiers": [0],
+                "supported_output_formats": ["txt", "json"],
+                "active_instances": 1
+            },
+            {
+                "id": "ocr-paddle-vl",
+                "display_name": "PaddleOCR-VL Structured Extract",
+                "description": "GPU-accelerated structured data extraction (tables, layouts)",
+                "allowed_methods": ["structured_extract"],
+                "allowed_tiers": [0],
+                "supported_output_formats": ["json", "md"],
+                "active_instances": 1
+            }
+        ],
+        "total": 2
+    }
+}
+```
+
+> **NOTE:** `supported_output_formats` is declared by workers during registration and stored on ServiceType.
+> Frontend uses this field to dynamically filter available output formats based on selected method.
 
 ---
 
@@ -562,6 +596,7 @@ POST /api/v1/internal/register
     "dev_contact": "dev@example.com",
     "allowed_methods": ["text_raw"],
     "allowed_tiers": [0],
+    "supported_output_formats": ["txt", "json"],
     "access_key": "sk_local_paddle"
 }
 ```
@@ -827,7 +862,7 @@ class ServiceInstanceStatus(str, Enum):
 class UploadRequest(BaseModel):
     method: str = "text_raw"
     tier: int = 0
-    output_format: Literal["txt", "json"] = "txt"
+    output_format: str = "txt"  # Dynamic: validated against service's supported_output_formats
     retention_hours: int = 168  # 7 days default
 ```
 
@@ -881,6 +916,7 @@ class RegisterRequest(BaseModel):
     dev_contact: Optional[str] = None
     allowed_methods: List[str] = ["text_raw"]
     allowed_tiers: List[int] = [0]
+    supported_output_formats: List[str] = ["txt", "json"]  # Formats this worker can produce
     access_key: Optional[str] = None  # For seeded services
 
 class JobStatusUpdate(BaseModel):

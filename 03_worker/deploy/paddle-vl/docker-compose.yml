@@ -1,19 +1,18 @@
-# OCR Worker - PaddleOCR (GPU)
+# OCR Worker - PaddleOCR-VL Structured Extraction (GPU)
 #
 # Prerequisites: build base image first
 #   cd 03_worker && make build-base-gpu
 #
 # Usage (from project root):
-#   docker-compose -f 03_worker/deploy/paddle-text/docker-compose.yml up -d
-#   docker-compose -f 03_worker/deploy/paddle-text/docker-compose.yml up -d --scale worker-paddle=3
-#   docker-compose -f 03_worker/deploy/paddle-text/docker-compose.yml down
+#   docker compose -f 03_worker/deploy/paddle-vl/docker-compose.yml up -d
+#   docker compose -f 03_worker/deploy/paddle-vl/docker-compose.yml down
 
 services:
-  worker-paddle:
+  worker-paddle-vl:
     build:
       context: ../..
-      dockerfile: deploy/paddle-text/Dockerfile
-    image: ocr-worker-paddle:latest
+      dockerfile: deploy/paddle-vl/Dockerfile
+    image: ocr-worker-paddle-vl:latest
     env_file:
       - ../../../.env
       - .env

@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 # Engine types
 ENGINE_PADDLE = "paddle"
 ENGINE_TESSERACT = "tesseract"
+ENGINE_PADDLE_VL = "paddle_vl"
 
 
 def create_handler(engine: str, use_gpu: bool, lang: str) -> BaseHandler:
@@ -18,6 +19,9 @@ def create_handler(engine: str, use_gpu: bool, lang: str) -> BaseHandler:
     if engine == ENGINE_TESSERACT:
         from app.engines.tesseract import TextRawTesseractHandler
         return TextRawTesseractHandler(lang=lang)
+    elif engine == ENGINE_PADDLE_VL:
+        from app.engines.paddle_vl import StructuredExtractHandler
+        return StructuredExtractHandler(use_gpu=use_gpu, lang=lang)
     else:
         # Default: PaddleOCR
         from app.engines.paddle_text import TextRawHandler
@@ -43,14 +47,20 @@ class OCRProcessor:
         self.lang = lang
         self.use_gpu = use_gpu
 
-        self.handlers = {
-            "text_raw": create_handler(engine, use_gpu, lang),
-        }
+        # Paddle-VL registers "structured_extract" method instead of "text_raw"
+        if engine == ENGINE_PADDLE_VL:
+            self.handlers = {
+                "structured_extract": create_handler(engine, use_gpu, lang),
+            }
+        else:
+            self.handlers = {
+                "text_raw": create_handler(engine, use_gpu, lang),
+            }
 
     def get_engine_info(self) -> Dict[str, Any]:
         """Return engine information for registration."""
-        handler = self.handlers.get("text_raw")
-        if hasattr(handler, "get_engine_info"):
+        handler = next(iter(self.handlers.values()), None)
+        if handler and hasattr(handler, "get_engine_info"):
             return handler.get_engine_info()
         return {
             "engine": self.engine,
