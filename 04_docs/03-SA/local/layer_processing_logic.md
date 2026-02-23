@@ -1,7 +1,7 @@
 # OCR Platform Local MVP1 - Layer Processing Logic
 
-> Version: 3.0 | Phase: Local MVP 1
-> Aligned with: SA v3.1 + Actual Implementation
+> Version: 3.1 | Phase: Local MVP 1
+> Aligned with: SA v3.1 + Actual Code (synced 2025-02)
 
 ---
 
@@ -373,6 +373,11 @@
 
 ### 3.4 Retry Orchestrator Flow (Retry at Orchestration Layer)
 
+> **⚠️ IMPLEMENTATION STATUS: STUB — `RetryOrchestrator` methods (`handle_failure`,
+> `decide_retry_or_dlq`, `requeue_job`, `move_to_dlq`) are defined but contain only `pass`.
+> The design below is the target architecture. Currently, workers report errors but
+> the orchestrator does not retry or move to DLQ automatically.**
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                     RETRY ORCHESTRATOR FLOW                                  │
@@ -428,6 +433,15 @@
 
 ### 3.5 Heartbeat Monitor Flow
 
+> **⚠️ IMPLEMENTATION STATUS:**
+> - **Heartbeat receiving** (POST /internal/heartbeat): ✅ Fully implemented.
+>   Updates `last_heartbeat_at`, records heartbeat, returns action response
+>   (`continue`/`approved`/`drain`/`shutdown`).
+> - **Heartbeat Monitor background task**: ❌ STUB — `HeartbeatMonitor.check_workers()`,
+>   `detect_stalled()`, `recover_stalled_jobs()` contain only `pass`.
+>   No background scheduler runs these methods. Dead workers are NOT auto-detected.
+>   `get_stale_instances(timeout=90)` query exists in repository but is never called.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      HEARTBEAT MONITOR FLOW                                  │
@@ -436,15 +450,13 @@
 │   Worker sends heartbeat every 30 seconds:                                  │
 │                                                                              │
 │   POST /api/v1/internal/heartbeat                                           │
+│   Headers: X-Access-Key: {access_key}  // if type is APPROVED               │
 │   {                                                                          │
 │     "instance_id": "ocr-paddle-abc123",                                     │
-│     "access_key": "sk_xxx",                                                 │
 │     "status": "processing",        // idle | processing | error             │
 │     "current_job_id": "job_abc",   // null if idle                         │
-│     "progress": {                                                           │
-│       "files_completed": 2,                                                 │
-│       "files_total": 5                                                      │
-│     },                                                                       │
+│     "files_completed": 2,          // flat fields, no nested progress       │
+│     "files_total": 5,                                                       │
 │     "error_count": 0                                                        │
 │   }                                                                          │
 │         │                                                                    │
@@ -453,9 +465,15 @@
 │   │                   ORCHESTRATOR HEARTBEAT HANDLER                     │   │
 │   │                                                                      │   │
 │   │   1. Validate access_key (ServiceType.status = APPROVED)            │   │
-│   │   2. Update service_instances.last_heartbeat_at                     │   │
-│   │   3. INSERT INTO heartbeats (all fields + received_at = now())      │   │
-│   │   4. Return 200 OK                                                  │   │
+│   │   2. Update service_instances.last_heartbeat_at + status            │   │
+│   │   3. UPSERT INTO heartbeats (all fields + received_at = now())     │   │
+│   │   4. Determine action based on ServiceType status:                  │   │
+│   │      - PENDING → action: "continue" (keep waiting)                 │   │
+│   │      - APPROVED + instance WAITING → action: "approved" + key      │   │
+│   │      - APPROVED + instance ACTIVE → action: "continue"            │   │
+│   │      - DISABLED → action: "drain" (finish then stop)              │   │
+│   │      - REJECTED → action: "shutdown" + rejection_reason           │   │
+│   │   5. Return HeartbeatResponse {action, access_key?, reason?}       │   │
 │   │                                                                      │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
@@ -933,6 +951,8 @@
 
 ### 5.3 Retry Flow (Orchestrator Handles Retry)
 
+> **⚠️ This sequence is the TARGET design. RetryOrchestrator is currently a stub.**
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SEQUENCE: ERROR & RETRY                                   │
@@ -1027,71 +1047,87 @@
 
 ---
 
-## 6. Job State Machine (Complete)
+## 6. Job State Machine (Actual Code)
+
+> **State machine transitions defined in `state_machine.py`.
+> Some transitions (retry, DLQ) are defined but the orchestrator to trigger them is a stub.**
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           JOB STATE MACHINE                                  │
+│                     JOB STATE MACHINE (from code)                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  VALID_TRANSITIONS = {                                                      │
+│    "SUBMITTED":       {"VALIDATING", "REJECTED"},                           │
+│    "VALIDATING":      {"QUEUED", "REJECTED"},                               │
+│    "QUEUED":          {"PROCESSING", "CANCELLED"},                          │
+│    "PROCESSING":      {"COMPLETED", "PARTIAL_SUCCESS", "FAILED"},           │
+│    "FAILED":          {"QUEUED", "DEAD_LETTER"},    # Retry or DLQ          │
+│    "COMPLETED":       {},  # terminal                                       │
+│    "PARTIAL_SUCCESS": {},  # terminal                                       │
+│    "REJECTED":        {},  # terminal                                       │
+│    "CANCELLED":       {},  # terminal                                       │
+│    "DEAD_LETTER":     {},  # terminal                                       │
+│  }                                                                           │
+│                                                                              │
+│  Diagram:                                                                    │
 │                                                                              │
 │                           ┌───────────────┐                                 │
 │                           │   SUBMITTED   │                                 │
-│                           │  (Job created)│                                 │
 │                           └───────┬───────┘                                 │
-│                                   │ Auto                                    │
+│                                   │                                         │
 │                                   v                                         │
 │                           ┌───────────────┐                                 │
 │                           │  VALIDATING   │                                 │
-│                           │ (Check format)│                                 │
 │                           └───────┬───────┘                                 │
 │                                   │                                         │
 │                          ┌────────┼────────┐                               │
-│                          │                 │                               │
 │                       Valid            Invalid                              │
 │                          │                 │                               │
 │                          v                 v                               │
 │              ┌───────────────┐     ┌───────────────┐                       │
 │              │    QUEUED     │     │   REJECTED    │                       │
-│              │  (In queue)   │     │  (Terminal)   │                       │
-│              └───────┬───────┘     └───────────────┘                       │
-│                      │                                                      │
+│              └───────┬───────┘     │  (Terminal)   │                       │
+│                      │             └───────────────┘                       │
 │          ┌───────────┼───────────┐                                         │
-│          │           │           │                                         │
-│     User Cancel  Worker picks  (stays in queue)                            │
+│     User Cancel  Worker picks                                              │
 │          │           │                                                      │
 │          v           v                                                      │
 │   ┌───────────┐┌───────────────┐                                           │
 │   │ CANCELLED ││  PROCESSING   │                                           │
-│   │(Terminal) ││ (OCR running) │                                           │
+│   │(Terminal) ││               │                                           │
 │   └───────────┘└───────┬───────┘                                           │
 │                        │                                                    │
 │           ┌────────────┼────────────┐                                      │
-│           │            │            │                                      │
-│        Success    Retriable    Non-retriable                               │
-│           │        Error         Error                                     │
+│        Success      Mixed       Error                                      │
 │           │            │            │                                      │
 │           v            v            v                                      │
-│    ┌───────────┐ ┌──────────┐ ┌───────────┐                               │
-│    │ COMPLETED │ │ RETRYING │ │  FAILED   │                               │
-│    │ (Success) │ │          │ │(Terminal) │                               │
-│    └───────────┘ └────┬─────┘ └───────────┘                               │
-│                       │                                                     │
-│                       │ Orchestrator decides:                              │
-│                 ┌─────┼──────┐                                             │
-│               Yes           No                                              │
-│            (retry<3)    (retry>=3)                                          │
-│                 │            │                                              │
-│                 v            v                                              │
-│          ┌──────────┐ ┌───────────────┐                                    │
-│          │  QUEUED  │ │  DEAD_LETTER  │                                    │
-│          │(re-enter)│ │  (Terminal)   │                                    │
-│          └──────────┘ └───────────────┘                                    │
+│    ┌───────────┐ ┌───────────┐ ┌───────────┐                               │
+│    │ COMPLETED │ │ PARTIAL_  │ │  FAILED   │                               │
+│    │ (Terminal)│ │ SUCCESS   │ │           │                               │
+│    └───────────┘ │(Terminal) │ └─────┬─────┘                               │
+│                  └───────────┘       │                                      │
+│                                      │ ⚠️ Retry path (STUB):              │
+│                                ┌─────┼──────┐                              │
+│                              Yes           No                               │
+│                           (retry<3)    (retry>=3)                           │
+│                                │            │                              │
+│                                v            v                              │
+│                         ┌──────────┐ ┌───────────────┐                     │
+│                         │  QUEUED  │ │  DEAD_LETTER  │                     │
+│                         │(re-enter)│ │  (Terminal)   │                     │
+│                         └──────────┘ └───────────────┘                     │
 │                                                                              │
-│  Terminal States: COMPLETED, FAILED, REJECTED, CANCELLED, DEAD_LETTER      │
+│  NOTE: No RETRYING state. FAILED → QUEUED is direct (when implemented).    │
+│  NOTE: PARTIAL_SUCCESS exists at Job level in code (PROCESSING can         │
+│        transition to it), though logically it's a Request-level concept.    │
 │                                                                              │
-│  Request Status Aggregation:                                                │
+│  Terminal: COMPLETED, PARTIAL_SUCCESS, FAILED, REJECTED, CANCELLED,        │
+│            DEAD_LETTER                                                      │
+│                                                                              │
+│  Request Status Aggregation (defined in state_machine.py, ⚠️ STUB):       │
 │  ┌──────────────────┬──────────────────────────────────────────────────┐   │
-│  │ PROCESSING       │ Any job QUEUED/PROCESSING/RETRYING               │   │
+│  │ PROCESSING       │ Any job QUEUED/PROCESSING                        │   │
 │  │ COMPLETED        │ All jobs COMPLETED                               │   │
 │  │ PARTIAL_SUCCESS  │ Mix: >=1 COMPLETED + >=1 terminal failure        │   │
 │  │ FAILED           │ All jobs FAILED/DEAD_LETTER/REJECTED            │   │

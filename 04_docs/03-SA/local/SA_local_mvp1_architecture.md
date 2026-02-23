@@ -55,10 +55,10 @@ Phạm vi kiến trúc bao gồm: React frontend và MinIO object storage ở Ed
 | **File Proxy Service** | Module trung gian trong Orchestration layer, là điểm duy nhất ngoài Edge có storage credentials. Worker (Processing) phải gọi File Proxy để download/upload files. File Proxy gọi sang Edge layer (Object Storage) để thực hiện file operations. |
 | **Service Registration & Authentication** | Mỗi OCR Service được Admin đăng ký và cấp access_key. Service dùng key này để authenticate với File Proxy và pull jobs từ queue. Service không đăng ký → không thể hoạt động. |
 | **NATS JetStream Queue** | Sử dụng NATS JetStream với native subject-based routing. Subject pattern: `{task}.{method}.tier{tier}`. Message persistence đảm bảo không mất jobs khi restart. Sẵn sàng cho multi-service expansion. |
-| **Full Job State Machine** | Job lifecycle đầy đủ: SUBMITTED → VALIDATING → QUEUED → PROCESSING → COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED / DEAD_LETTER. State machine designed theo production requirements. |
-| **Exponential Backoff Retry** | Retry tại tầng orchestrator (không retry trong worker). Retry mechanism với delay tăng dần (1s → 2s → 4s). Phân loại errors thành retriable và non-retriable. Vượt max retries → Dead Letter Queue. |
+| **Full Job State Machine** | Job lifecycle đầy đủ: SUBMITTED → VALIDATING → QUEUED → PROCESSING → COMPLETED / PARTIAL_SUCCESS / FAILED / CANCELLED / DEAD_LETTER. State machine transitions defined trong `state_machine.py`. **Note:** Không có RETRYING state, retry path là FAILED → QUEUED trực tiếp. |
+| **Exponential Backoff Retry** | **⚠️ STUB** — Design: Retry tại tầng orchestrator (không retry trong worker). Retry mechanism với delay tăng dần (1s → 2s → 4s). `RetryOrchestrator` class tồn tại nhưng các methods chưa implement. |
 | **Batch Processing** | Một request chứa nhiều files (max 20). Partial success handling — files thành công không bị block bởi files thất bại. Download kết quả riêng lẻ hoặc ZIP. |
-| **Heartbeat Protocol** | Worker gửi heartbeat định kỳ về Orchestrator chứa: trạng thái, tiến độ, error count. Orchestrator phát hiện worker dead/stalled/unhealthy. Phase 1 implement basic heartbeat, Phase 2+ mở rộng thêm signals. |
+| **Heartbeat Protocol** | Worker gửi heartbeat mỗi 30s, Orchestrator nhận và trả action response (`continue`/`approved`/`drain`/`shutdown`). **⚠️ Background monitor** (phát hiện worker dead/stalled) chưa implement — `HeartbeatMonitor` class tồn tại nhưng là stub. Worker chết sẽ giữ status ACTIVE trong DB. |
 | **Configurable Parameters** | Timeout, max retries, file limits, output format, retention đều configurable. Không cần rebuild để thay đổi parameters. |
 | **Soft Delete & Recovery** | Files không bị hard delete — move to deleted bucket. Users có thể recover trong 7 ngày. Audit trail preserved cho compliance. |
 
@@ -179,7 +179,7 @@ Pattern này cho phép:
 │                                                                                     │
 │  Access Points:                                                                     │
 │  • Frontend:      http://localhost:3000                                             │
-│  • API:           http://localhost:8080/api/v1                                      │
+│  • API:           http://localhost:8000/api/v1                                      │
 │  • MinIO Console: http://localhost:9001 (browse stored files)                       │
 │                                                                                     │
 │  KEY RULES:                                                                         │

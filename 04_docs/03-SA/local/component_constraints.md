@@ -1,7 +1,7 @@
 # OCR Platform Local MVP1 - Component Output Constraints
 
-> Version: 3.0 | Phase: Local MVP 1
-> Aligned with: SA v3.1 + Actual Implementation
+> Version: 3.1 | Phase: Local MVP 1
+> Aligned with: SA v3.1 + Actual Code (synced 2025-02)
 
 ---
 
@@ -186,39 +186,52 @@ Constraints cho output của từng component. Mỗi component phải tuân th�
 
 ## 6. Job Module Constraints
 
-### 6.1 State Machine Transitions (CRITICAL)
+### 6.1 State Machine Transitions (from code: `state_machine.py`)
 
 | From | To | Trigger | Valid? |
 |------|-----|---------|--------|
 | SUBMITTED | VALIDATING | Auto | yes |
+| SUBMITTED | REJECTED | Direct rejection | yes |
 | VALIDATING | QUEUED | File valid | yes |
 | VALIDATING | REJECTED | File invalid | yes |
 | QUEUED | PROCESSING | Worker picks | yes |
 | QUEUED | CANCELLED | User cancel | yes |
 | PROCESSING | COMPLETED | Success | yes |
-| PROCESSING | RETRYING | Retriable error | yes |
-| PROCESSING | FAILED | Non-retriable error | yes |
-| RETRYING | QUEUED | Delay elapsed, retry < max | yes |
-| RETRYING | DEAD_LETTER | retry >= max | yes |
+| PROCESSING | PARTIAL_SUCCESS | Partial success | yes |
+| PROCESSING | FAILED | Error | yes |
+| FAILED | QUEUED | Retry (orchestrator) | yes |
+| FAILED | DEAD_LETTER | Retry exhausted | yes |
 | * | * | Any other | INVALID |
+
+> **NOTE:** No `RETRYING` state exists in code. Retry path is `FAILED → QUEUED` directly.
+> `PARTIAL_SUCCESS` is in the Job enum and reachable from PROCESSING.
+> Retry transitions (FAILED → QUEUED, FAILED → DEAD_LETTER) are defined in state machine
+> but **RetryOrchestrator is a stub** — these transitions are not triggered automatically.
 
 ### 6.2 Retry Constraints (Orchestrator)
 
-| Aspect | Constraint |
-|--------|------------|
-| **Who retries** | Orchestrator (NOT Worker) |
-| **Max Retries** | 3 (max_retries field) |
-| **Backoff Formula** | delay = 1s x 2^retry_count |
-| **Delays** | 1s, 2s, 4s |
-| **Retriable Errors** | Timeout, network, temp file |
-| **Non-retriable** | Invalid file, corrupted, access denied |
-| **After max retries** | Move to DEAD_LETTER, publish to DLQ |
+> **⚠️ IMPLEMENTATION STATUS: STUB — RetryOrchestrator methods are defined but not implemented.**
+> The constraints below are the target design.
+
+| Aspect | Constraint | Implemented? |
+|--------|------------|-------------|
+| **Who retries** | Orchestrator (NOT Worker) | Design only |
+| **Max Retries** | 3 (max_retries field) | Field exists ✅ |
+| **Backoff Formula** | delay = 1s x 2^retry_count | ❌ Not implemented |
+| **Delays** | 1s, 2s, 4s | ❌ Not implemented |
+| **Retriable Errors** | Timeout, network, temp file | ❌ Not implemented |
+| **Non-retriable** | Invalid file, corrupted, access denied | ❌ Not implemented |
+| **After max retries** | Move to DEAD_LETTER, publish to DLQ | ❌ Not implemented |
 
 ### 6.3 Request Status Aggregation
 
+> **⚠️ `JobStateMachine.get_request_status()` is defined but returns `None` (stub).**
+> Request status is currently set manually in upload flow (default: PROCESSING)
+> and updated in job completion handlers.
+
 | Condition | Status |
 |-----------|--------|
-| Any job QUEUED/PROCESSING/RETRYING | `PROCESSING` |
+| Any job QUEUED/PROCESSING | `PROCESSING` |
 | All jobs COMPLETED | `COMPLETED` |
 | All jobs FAILED/DEAD_LETTER/REJECTED | `FAILED` |
 | Mix: >=1 COMPLETED + >=1 terminal failure | `PARTIAL_SUCCESS` |

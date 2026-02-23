@@ -30,7 +30,10 @@
       "Bash(npx vite build)",
       "Bash(nvidia-smi:*)",
       "Bash(lspci:*)",
-      "Bash(docker info:*)"
+      "Bash(docker info:*)",
+      "Bash(winget search:*)",
+      "Bash(move \"04_docs\\\\04_planning\\\\1_local_mvp1\\\\00_planning_index.md\" \"04_docs\\\\03-SA\\\\local\\\\planning_index.md\")",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

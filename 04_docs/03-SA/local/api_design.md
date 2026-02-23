@@ -1,7 +1,7 @@
 # OCR Platform Local MVP1 - API Design
 
-> Version: 3.0 | Phase: Local MVP 1
-> Aligned with: SA v3.1 + Actual Implementation
+> Version: 3.1 | Phase: Local MVP 1
+> Aligned with: SA v3.1 + Actual Code (synced 2025-02)
 
 ---
 
@@ -346,27 +346,19 @@ Authorization: Bearer {token}
         "job": {
             "id": "job_001",
             "request_id": "req_abc123",
-            "file": {
-                "id": "file_001",
-                "name": "image1.png",
-                "size_bytes": 102400,
-                "mime_type": "image/png",
-                "page_count": 1
-            },
+            "file_id": "file_001",
             "status": "COMPLETED",
             "method": "text_raw",
             "tier": 0,
             "retry_count": 0,
             "max_retries": 3,
             "error_history": [],
-            "result": {
-                "format": "txt",
-                "processing_time_ms": 1250
-            },
-            "worker_id": "ocr-paddle-abc123",
-            "created_at": "2024-01-15T10:30:00Z",
             "started_at": "2024-01-15T10:30:02Z",
-            "completed_at": "2024-01-15T10:30:05Z"
+            "completed_at": "2024-01-15T10:30:05Z",
+            "processing_time_ms": 1250,
+            "result_path": "results/req_abc123/job_001.txt",
+            "worker_id": "ocr-paddle-abc123",
+            "created_at": "2024-01-15T10:30:00Z"
         }
     }
 }
@@ -386,24 +378,38 @@ Authorization: Bearer {token}
 **Response (200 OK):**
 ```json
 {
-    "success": true,
-    "data": {
-        "job_id": "job_001",
-        "format": "txt",
-        "content": "This is the extracted text...",
-        "metadata": {
-            "word_count": 150,
-            "confidence": 0.95
-        }
+    "text": "This is the extracted text...",
+    "lines": 15,
+    "metadata": {
+        "method": "text_raw",
+        "tier": "0",
+        "processing_time_ms": 1250,
+        "version": "1.0.0"
     }
 }
 ```
+
+### 6.3 Download Job Result
+
+```
+GET /api/v1/jobs/{job_id}/download
+Authorization: Bearer {token}
+```
+
+**Response:** File content (streaming) with appropriate Content-Type header.
 
 ---
 
 ## 7. File Endpoints
 
-### 7.1 Get Original File URL
+### 7.1 Get File Metadata
+
+```
+GET /api/v1/files/{file_id}
+Authorization: Bearer {token}
+```
+
+### 7.2 Get Original File URL
 
 ```
 GET /api/v1/files/{file_id}/original-url
@@ -421,12 +427,21 @@ Authorization: Bearer {token}
 }
 ```
 
-### 7.2 Get Result File URL
+### 7.3 Get Result File URL
 
 ```
 GET /api/v1/files/{file_id}/result-url
 Authorization: Bearer {token}
 ```
+
+### 7.4 Download Original File
+
+```
+GET /api/v1/files/{file_id}/download
+Authorization: Bearer {token}
+```
+
+**Response:** File content (streaming) with appropriate Content-Type header.
 
 ---
 
@@ -527,6 +542,20 @@ Authorization: Bearer {admin_token}
 GET /api/v1/admin/service-instances
 Authorization: Bearer {admin_token}
 ```
+
+### 8.7 Admin Dashboard
+
+```
+GET /api/v1/admin/dashboard/stats
+GET /api/v1/admin/dashboard/recent-requests?page=1&page_size=20
+GET /api/v1/admin/dashboard/users?page=1&page_size=50
+GET /api/v1/admin/dashboard/job-volume?hours=24
+GET /api/v1/admin/dashboard/service-instances?type_id=...&status=...
+Authorization: Bearer {admin_token}
+```
+
+> Dashboard endpoints provide system KPI stats, recent requests from all users,
+> user list with request counts, hourly job volume with latency, and service instance health.
 
 ---
 
@@ -763,13 +792,13 @@ X-Access-Key: {worker_access_key}
     "instance_id": "ocr-paddle-abc123",
     "status": "processing",
     "current_job_id": "job_abc123",
-    "progress": {
-        "files_completed": 2,
-        "files_total": 5
-    },
+    "files_completed": 2,
+    "files_total": 5,
     "error_count": 0
 }
 ```
+
+> **NOTE:** Fields are flat (no nested `progress` object).
 
 **Status values:**
 - `idle` - Worker waiting for jobs
@@ -780,11 +809,18 @@ X-Access-Key: {worker_access_key}
 ```json
 {
     "success": true,
-    "data": {
-        "acknowledged": true
-    }
+    "received_at": "2024-01-15T10:30:30Z",
+    "action": "continue",
+    "access_key": null,
+    "rejection_reason": null
 }
 ```
+
+**Response `action` values:**
+- `continue` - Keep current state (waiting or processing)
+- `approved` - Type was just approved, `access_key` included in response
+- `drain` - Type was disabled, finish current job then stop
+- `shutdown` - Type was rejected, `rejection_reason` included
 
 ---
 
@@ -820,10 +856,11 @@ class JobStatus(str, Enum):
     # Active states
     QUEUED = "QUEUED"
     PROCESSING = "PROCESSING"
-    RETRYING = "RETRYING"
+    # NOTE: No RETRYING state. Retry transitions go FAILED → QUEUED directly.
 
     # Terminal states - Success
     COMPLETED = "COMPLETED"
+    PARTIAL_SUCCESS = "PARTIAL_SUCCESS"  # Also used at Job level in code
 
     # Terminal states - Failure
     FAILED = "FAILED"
@@ -837,6 +874,8 @@ class RequestStatus(str, Enum):
     PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    # NOTE: Request status aggregation (get_request_status) is defined
+    # in state_machine.py but NOT YET IMPLEMENTED (stub).
 
 class ServiceTypeStatus(str, Enum):
     PENDING = "PENDING"
@@ -931,8 +970,16 @@ class HeartbeatPayload(BaseModel):
     instance_id: str
     status: Literal["idle", "processing", "error"]
     current_job_id: Optional[str]
-    progress: Optional[ProgressInfo]
+    files_completed: int = 0   # Flat fields, no nested progress object
+    files_total: int = 0
     error_count: int = 0
+
+class HeartbeatResponse(BaseModel):
+    success: bool
+    received_at: str                    # ISO 8601 UTC
+    action: str                         # "continue", "approved", "drain", "shutdown"
+    access_key: Optional[str] = None    # Set when action="approved"
+    rejection_reason: Optional[str] = None  # Set when action="shutdown"
 ```
 
 ---
@@ -953,8 +1000,11 @@ class HeartbeatPayload(BaseModel):
 | POST | `/api/v1/requests/{id}/cancel` | Session | Cancel request |
 | GET | `/api/v1/jobs/{id}` | Session | Get job detail |
 | GET | `/api/v1/jobs/{id}/result` | Session | Get OCR result |
+| GET | `/api/v1/jobs/{id}/download` | Session | Download result file |
+| GET | `/api/v1/files/{id}` | Session | Get file metadata |
 | GET | `/api/v1/files/{id}/original-url` | Session | Get original presigned URL |
 | GET | `/api/v1/files/{id}/result-url` | Session | Get result presigned URL |
+| GET | `/api/v1/files/{id}/download` | Session | Download original file |
 | GET | `/api/v1/services` | Session | List available services |
 | GET | `/api/v1/health` | - | Health check |
 
@@ -969,6 +1019,11 @@ class HeartbeatPayload(BaseModel):
 | POST | `/api/v1/admin/service-types/{id}/enable` | Admin | Enable type |
 | DELETE | `/api/v1/admin/service-types/{id}` | Admin | Delete type |
 | GET | `/api/v1/admin/service-instances` | Admin | List instances |
+| GET | `/api/v1/admin/dashboard/stats` | Admin | System KPI stats |
+| GET | `/api/v1/admin/dashboard/recent-requests` | Admin | All users' requests |
+| GET | `/api/v1/admin/dashboard/users` | Admin | User list + counts |
+| GET | `/api/v1/admin/dashboard/job-volume` | Admin | Hourly job volume |
+| GET | `/api/v1/admin/dashboard/service-instances` | Admin | Instance health |
 
 ### Orchestration Layer (Internal - Worker use)
 

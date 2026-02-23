@@ -1,7 +1,7 @@
 # OCR Platform Local MVP1 - Planning Index
 
-> Version: 3.0 | Phase: Local MVP 1
-> Aligned with: SA v3.1 + Actual Implementation
+> Version: 3.1 | Phase: Local MVP 1
+> Aligned with: SA v3.1 + Actual Code (synced 2025-02)
 > Last Updated: 2025-02
 
 ---
@@ -18,10 +18,12 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 
 | # | Document | Description | Link |
 |---|----------|-------------|------|
-| 01 | **Code Structure** | Cấu trúc thư mục, files, layer mapping | [01_code_structure.md](./01_code_structure.md) |
-| 02 | **Layer Processing Logic** | Logic xử lý, diagrams, sequence diagrams | [02_layer_processing_logic.md](./02_layer_processing_logic.md) |
-| 03 | **API Design** | Chi tiết API endpoints (user + admin + internal) | [03_api_design.md](./03_api_design.md) |
-| 04 | **Component Constraints** | Ràng buộc cho output của từng component | [04_component_constraints.md](./04_component_constraints.md) |
+| 1 | **Layer Processing Logic** | Logic xử lý, diagrams, sequence diagrams | [layer_processing_logic.md](./layer_processing_logic.md) |
+| 2 | **API Design** | Chi tiết API endpoints (user + admin + internal) | [api_design.md](./api_design.md) |
+| 3 | **Component Constraints** | Ràng buộc cho output của từng component | [component_constraints.md](./component_constraints.md) |
+| 4 | **PaddleOCR-VL Worker** | Spec thêm worker structured extraction | [paddle_ocr_vl_worker.md](./paddle_ocr_vl_worker.md) |
+| 5 | **Current Process** | Gap analysis các OCR engine hiện tại | [current_process.md](./current_process.md) |
+| 6 | **Review Questions** | SAD review questionnaire | [highlevel_review_question.md](./highlevel_review_question.md) |
 
 ---
 
@@ -100,44 +102,37 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 
 ## Quick Navigation
 
-### 1. Code Structure
-- [Root Directory](./01_code_structure.md#1-root-directory-structure)
-- [Frontend Structure](./01_code_structure.md#2-frontend-structure-react--typescript--vite)
-- [Backend Structure](./01_code_structure.md#3-backend-structure-fastapi--python)
-- [Worker Structure](./01_code_structure.md#4-worker-structure-python---processing-layer)
-- [Database Models](./01_code_structure.md#5-database-models-sqlite---orchestration-layer)
-- [Docker Compose](./01_code_structure.md#6-docker-compose-services)
+### 1. Layer Processing Logic
+- [Architecture Overview](./layer_processing_logic.md#1-architecture-overview)
+- [Edge Layer](./layer_processing_logic.md#2-edge-layer-processing)
+- [Orchestration Layer](./layer_processing_logic.md#3-orchestration-layer-processing)
+- [Retry Orchestrator](./layer_processing_logic.md#34-retry-orchestrator-flow-retry-at-orchestration-layer) ⚠️ stub
+- [Heartbeat Monitor](./layer_processing_logic.md#35-heartbeat-monitor-flow) ⚠️ background task stub
+- [Worker Registration](./layer_processing_logic.md#37-worker-registration-flow-new)
+- [Admin Service Management](./layer_processing_logic.md#38-admin-service-management-flow-new)
+- [Processing Layer](./layer_processing_logic.md#4-processing-layer)
+- [Job State Machine](./layer_processing_logic.md#6-job-state-machine-actual-code)
 
-### 2. Layer Processing Logic
-- [Architecture Overview](./02_layer_processing_logic.md#1-architecture-overview)
-- [Edge Layer](./02_layer_processing_logic.md#2-edge-layer-processing)
-- [Orchestration Layer](./02_layer_processing_logic.md#3-orchestration-layer-processing)
-- [Retry Orchestrator](./02_layer_processing_logic.md#34-retry-orchestrator-flow-retry-at-orchestration-layer)
-- [Heartbeat Monitor](./02_layer_processing_logic.md#35-heartbeat-monitor-flow)
-- [Worker Registration](./02_layer_processing_logic.md#37-worker-registration-flow-new)
-- [Admin Service Management](./02_layer_processing_logic.md#38-admin-service-management-flow-new)
-- [Processing Layer](./02_layer_processing_logic.md#4-processing-layer)
-- [Job State Machine](./02_layer_processing_logic.md#6-job-state-machine-complete)
+### 2. API Design
+- [User Authentication](./api_design.md#3-authentication-endpoints)
+- [Upload Endpoint](./api_design.md#4-upload-endpoints)
+- [Request Endpoints](./api_design.md#5-request-endpoints)
+- [Job Endpoints](./api_design.md#6-job-endpoints)
+- [Admin Endpoints](./api_design.md#8-admin-endpoints-new)
+- [Admin Dashboard](./api_design.md#87-admin-dashboard)
+- [Internal: Register](./api_design.md#101-worker-registration)
+- [Internal: File Proxy](./api_design.md#103-file-proxy---download-file)
+- [Internal: Job Status (PATCH)](./api_design.md#105-update-job-status)
+- [Internal: Heartbeat](./api_design.md#106-heartbeat)
+- [Job Status Enum](./api_design.md#12-job-status-enum)
 
-### 3. API Design
-- [User Authentication](./03_api_design.md#3-authentication-endpoints)
-- [Upload Endpoint](./03_api_design.md#4-upload-endpoints)
-- [Request Endpoints](./03_api_design.md#5-request-endpoints)
-- [Job Endpoints](./03_api_design.md#6-job-endpoints)
-- [Admin Endpoints](./03_api_design.md#8-admin-endpoints-new)
-- [Internal: Register](./03_api_design.md#101-worker-registration)
-- [Internal: File Proxy](./03_api_design.md#103-file-proxy---download-file)
-- [Internal: Job Status (PATCH)](./03_api_design.md#105-update-job-status)
-- [Internal: Heartbeat](./03_api_design.md#106-heartbeat)
-- [Job Status Enum](./03_api_design.md#12-job-status-enum)
-
-### 4. Component Constraints
-- [Layer Constraints](./04_component_constraints.md#2-layer-constraints-critical)
-- [Worker Constraints](./04_component_constraints.md#9-ocr-worker-constraints)
-- [Retry Behavior](./04_component_constraints.md#93-retry-behavior-critical)
-- [State Machine](./04_component_constraints.md#61-state-machine-transitions-critical)
-- [ServiceType/Instance](./04_component_constraints.md#12-service-type--instance-constraints-new)
-- [MinIO Access Control](./04_component_constraints.md#102-access-control)
+### 3. Component Constraints
+- [Layer Constraints](./component_constraints.md#2-layer-constraints-critical)
+- [Worker Constraints](./component_constraints.md#9-ocr-worker-constraints)
+- [Retry Behavior](./component_constraints.md#93-retry-behavior-critical)
+- [State Machine](./component_constraints.md#61-state-machine-transitions-from-code-state_machinepy)
+- [ServiceType/Instance](./component_constraints.md#12-service-type--instance-constraints-new)
+- [MinIO Access Control](./component_constraints.md#102-access-control)
 
 ---
 
@@ -168,12 +163,12 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 - [x] output_format + retention_hours on Request (not Job)
 
 ### Backend - Job Module
-- [x] Full state machine (all states)
-- [x] SUBMITTED -> VALIDATING -> QUEUED transition
-- [x] Status aggregation (including PARTIAL_SUCCESS)
-- [x] Cancel request (QUEUED jobs only)
-- [x] **Retry Orchestrator** (retry at Orchestration, not Worker)
-- [x] Dead Letter Queue handling
+- [x] State machine transitions defined (`state_machine.py`)
+- [ ] SUBMITTED -> VALIDATING -> QUEUED transition (current flow skips to SUBMITTED → PROCESSING)
+- [ ] Status aggregation `get_request_status()` — **STUB** (returns None)
+- [ ] Cancel request `cancel_request()` — **STUB**
+- [ ] **Retry Orchestrator** `handle_failure()`, `requeue_job()`, `move_to_dlq()` — **ALL STUBS**
+- [ ] Dead Letter Queue consumption — not implemented
 
 ### Backend - File Proxy Module
 - [x] access_key validation (against ServiceType)
@@ -182,9 +177,9 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 - [x] POST /api/v1/internal/file-proxy/upload
 
 ### Backend - Heartbeat
-- [x] POST /api/v1/internal/heartbeat endpoint
+- [x] POST /api/v1/internal/heartbeat endpoint (with action response)
 - [x] Heartbeat table (references instance_id)
-- [x] Heartbeat monitor (detect dead/stalled instances)
+- [ ] Heartbeat monitor background task — **STUB** (`check_workers()`, `detect_stalled()` = pass)
 
 ### Backend - Worker Registration (NEW)
 - [x] POST /api/v1/internal/register
@@ -286,3 +281,4 @@ Tài liệu planning cho việc implement OCR Platform Local MVP Phase 1.
 | 1.0 | 2024-01-15 | Initial planning documents |
 | 2.0 | 2024-01-15 | Aligned with SA v3.1: MinIO in Edge, Retry at Orchestrator, Full state machine, Heartbeat protocol, Dead Letter Queue |
 | 3.0 | 2025-02 | Aligned with actual implementation: Numbered dirs, port 8000, ServiceType/Instance model, multi-engine workers, admin panel, worker self-registration, PATCH for job status, internal under /api/v1, container name networking, shared .env |
+| 3.1 | 2025-02 | Synced docs with actual code: Marked stubs (RetryOrchestrator, HeartbeatMonitor, get_request_status, cancel_request). Fixed document links (removed number prefixes). Updated Job state machine (no RETRYING, PARTIAL_SUCCESS at Job level). Added missing API endpoints (admin dashboard, file/job download). Updated heartbeat response format (action-based). |
