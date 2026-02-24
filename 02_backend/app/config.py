@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Service registry
     seed_services: str = ""
 
+    # CORS
+    cors_origins: str = "http://localhost:5173"  # comma-separated origins
+
     # Auth
     secret_key: str = "your-secret-key-change-in-production"
     session_expire_hours: int = 24

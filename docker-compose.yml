@@ -67,6 +67,8 @@ services:
       # In production, workers register dynamically and admin approves.
       # Format: type_id:access_key:methods:tiers (comma-separated for multiple)
       - SEED_SERVICES=${SEED_SERVICES}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
     depends_on:
       minio:
         condition: service_healthy

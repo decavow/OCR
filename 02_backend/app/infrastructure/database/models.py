@@ -70,7 +70,7 @@ class Request(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"))
-    method: Mapped[str] = mapped_column(String(50), default="text_raw")
+    method: Mapped[str] = mapped_column(String(50), default="ocr_text_raw")
     tier: Mapped[int] = mapped_column(Integer, default=0)
     output_format: Mapped[str] = mapped_column(String(10), default="txt")
     retention_hours: Mapped[int] = mapped_column(Integer, default=168)
@@ -141,6 +141,7 @@ class Job(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     processing_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     result_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    engine_version: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     worker_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -190,7 +191,7 @@ class ServiceType(Base):
     """
     Service type definition (admin-managed).
 
-    Each type represents a category of worker (e.g., text_raw, table, handwriting).
+    Each type represents a category of worker (e.g., ocr_text_raw, ocr_table, handwriting).
     Admin approves/rejects/disables at this level. access_key is generated per type.
     """
     __tablename__ = "service_types"
@@ -200,7 +201,7 @@ class ServiceType(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Dev description
     status: Mapped[str] = mapped_column(String(20), default=ServiceTypeStatus.PENDING)
     access_key: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
-    allowed_methods: Mapped[str] = mapped_column(Text, default='["text_raw"]')  # JSON array
+    allowed_methods: Mapped[str] = mapped_column(Text, default='["ocr_text_raw"]')  # JSON array
     allowed_tiers: Mapped[str] = mapped_column(Text, default='[0]')  # JSON array
     supported_output_formats: Mapped[str] = mapped_column(Text, default='["txt","json"]')  # JSON array
     engine_info: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON {name, version, capabilities}
@@ -315,7 +316,7 @@ class Service(Base):
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     access_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    allowed_methods: Mapped[str] = mapped_column(Text, default='["text_raw"]')  # JSON array
+    allowed_methods: Mapped[str] = mapped_column(Text, default='["ocr_text_raw"]')  # JSON array
     allowed_tiers: Mapped[str] = mapped_column(Text, default='[0]')  # JSON array
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

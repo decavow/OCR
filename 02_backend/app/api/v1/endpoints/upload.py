@@ -50,7 +50,7 @@ async def upload_files(
     files: List[UploadFile] = File(...),
     output_format: str = "txt",
     retention_hours: int = 168,
-    method: str = "text_raw",
+    method: str = "ocr_text_raw",
     tier: int = 0,
     db: Session = Depends(get_db),
     storage=Depends(get_storage),

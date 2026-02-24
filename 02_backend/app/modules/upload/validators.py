@@ -3,7 +3,7 @@
 from typing import List
 from fastapi import UploadFile
 
-from .exceptions import InvalidFileType, FileTooLarge, BatchTooLarge
+from .exceptions import InvalidFileType, FileTooLarge, BatchTooLarge, BatchTotalSizeTooLarge
 
 # Allowed file types
 ALLOWED_MIME_TYPES = [
@@ -31,6 +31,7 @@ MAGIC_BYTES = {
 
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 MAX_BATCH_SIZE = 20
+MAX_TOTAL_BATCH_SIZE = 200 * 1024 * 1024  # 200MB total
 
 
 def detect_mime_from_magic(content: bytes) -> str | None:
@@ -66,6 +67,12 @@ def validate_batch(files: List[UploadFile]) -> None:
         raise BatchTooLarge(0, MAX_BATCH_SIZE)  # No files
     if len(files) > MAX_BATCH_SIZE:
         raise BatchTooLarge(len(files), MAX_BATCH_SIZE)
+
+
+def validate_total_batch_size(total_bytes: int) -> None:
+    """Validate that total batch size does not exceed limit."""
+    if total_bytes > MAX_TOTAL_BATCH_SIZE:
+        raise BatchTotalSizeTooLarge(total_bytes, MAX_TOTAL_BATCH_SIZE)
 
 
 def get_content_type(filename: str, default: str = "application/octet-stream") -> str:

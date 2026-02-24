@@ -31,7 +31,7 @@ class Settings:
     worker_access_key: Optional[str] = _access_key_env if _access_key_env else None
 
     # Queue routing
-    worker_filter_subject: str = os.getenv("WORKER_FILTER_SUBJECT", "ocr.text_raw.tier0")
+    worker_filter_subject: str = os.getenv("WORKER_FILTER_SUBJECT", "ocr.ocr_text_raw.tier0")
 
     # Registration info
     worker_display_name: str = os.getenv("WORKER_DISPLAY_NAME", "OCR Worker")
@@ -41,7 +41,7 @@ class Settings:
     # Capabilities
     @property
     def worker_allowed_methods(self) -> List[str]:
-        methods_str = os.getenv("WORKER_ALLOWED_METHODS", "text_raw")
+        methods_str = os.getenv("WORKER_ALLOWED_METHODS", "ocr_text_raw")
         return [m.strip() for m in methods_str.split(",") if m.strip()]
 
     @property

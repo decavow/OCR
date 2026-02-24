@@ -77,7 +77,7 @@ def seed_services(seed_config: str) -> None:
     In production, workers register dynamically and admin approves.
 
     Format: type_id:access_key:methods:tiers[:formats];...
-    Example: ocr-text-tier0:sk_local_text_tier0:text_raw:0
+    Example: ocr-text-tier0:sk_local_text_tier0:ocr_text_raw:0
              ocr-paddle-vl:sk_local_paddle_vl:structured_extract:0:json,md,txt
 
     Seeded types are pre-approved with access_key already set.

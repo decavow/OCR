@@ -92,6 +92,7 @@ class OrchestratorClient:
         status: str,
         error: str = None,
         retriable: bool = True,
+        engine_version: str = None,
     ) -> None:
         """
         Update job status in orchestrator.
@@ -101,6 +102,7 @@ class OrchestratorClient:
             status: New status (PROCESSING, COMPLETED, FAILED)
             error: Error message if failed
             retriable: Whether the job can be retried
+            engine_version: Engine version string (e.g., "paddleocr 2.7.3")
         """
         logger.info(f"Updating job {job_id} status to {status}")
 
@@ -108,6 +110,8 @@ class OrchestratorClient:
         if error:
             payload["error"] = error
             payload["retriable"] = retriable
+        if engine_version:
+            payload["engine_version"] = engine_version
 
         if not self._access_key:
             raise RuntimeError("Access key not set - not approved yet")

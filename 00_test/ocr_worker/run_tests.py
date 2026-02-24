@@ -134,7 +134,7 @@ async def test_queue_client(result: TestResult):
 
         # Override settings for local testing
         settings.nats_url = NATS_URL
-        settings.worker_filter_subject = "ocr.text_raw.tier0"
+        settings.worker_filter_subject = "ocr.ocr_text_raw.tier0"
         settings.worker_service_id = "test-worker"
 
         client = QueueClient()
@@ -196,7 +196,7 @@ async def test_ocr_processor(result: TestResult):
 
     try:
         from app.core.processor import OCRProcessor
-        from app.handlers.text_raw import TextRawHandler
+        from app.handlers.ocr_text_raw import TextRawHandler
 
         # Test handler initialization
         handler = TextRawHandler(use_gpu=True, lang="en")
@@ -206,7 +206,7 @@ async def test_ocr_processor(result: TestResult):
         result.add_fail("TextRawHandler init", str(e))
         # Try CPU fallback
         try:
-            from app.handlers.text_raw import TextRawHandler
+            from app.handlers.ocr_text_raw import TextRawHandler
             handler = TextRawHandler(use_gpu=False, lang="en")
             result.add_pass("TextRawHandler initialized (CPU fallback)")
         except Exception as e2:
@@ -275,7 +275,7 @@ async def test_end_to_end_flow(result: TestResult):
             resp = await client.post(
                 f"{API_V1}/upload",
                 files=files,
-                params={"output_format": "txt", "method": "text_raw", "tier": 0},
+                params={"output_format": "txt", "method": "ocr_text_raw", "tier": 0},
                 headers=headers
             )
             if resp.status_code != 200:

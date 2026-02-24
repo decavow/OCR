@@ -127,7 +127,7 @@ async def get_job_result(
             method=job.method,
             tier=str(job.tier),
             processing_time_ms=job.processing_time_ms or 0,
-            version="1.0",
+            service_version=job.engine_version or "unknown",
         )
     )
 
@@ -186,3 +186,41 @@ async def download_job_result(
         media_type=content_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+
+@router.post("/{job_id}/cancel")
+async def cancel_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Cancel a single job (only if QUEUED)."""
+    job_repo = JobRepository(db)
+    request_repo = RequestRepository(db)
+
+    # Get job
+    job = job_repo.get_active(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check ownership via request
+    request = request_repo.get_active(job.request_id)
+    if not request or request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Only QUEUED jobs can be cancelled
+    if job.status != "QUEUED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel job with status {job.status}. Only QUEUED jobs can be cancelled.",
+        )
+
+    # Cancel the job
+    cancelled_count = job_repo.cancel_jobs([job])
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "cancelled": cancelled_count > 0,
+        "message": "Job cancelled" if cancelled_count > 0 else "Job was not in QUEUED state",
+    }

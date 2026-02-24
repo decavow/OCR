@@ -87,7 +87,7 @@ class TestNATSIntegration:
         resp = await client.post(
             f"{API_V1}/upload",
             files=files,
-            params={"method": "text_raw", "tier": 0},
+            params={"method": "ocr_text_raw", "tier": 0},
             headers=auth_headers
         )
 
@@ -102,7 +102,7 @@ class TestNATSIntegration:
             assert "job_id" in msg_data
             assert "file_id" in msg_data
             assert "request_id" in msg_data
-            assert msg_data["method"] == "text_raw"
+            assert msg_data["method"] == "ocr_text_raw"
             assert msg_data["tier"] == 0
             assert "object_key" in msg_data
 

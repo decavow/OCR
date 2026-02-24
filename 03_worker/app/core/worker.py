@@ -231,8 +231,10 @@ class OCRWorker:
                 content_type=result_content_type,
             )
 
-            # Report success to orchestrator
-            await self.orchestrator.update_status(job_id, "COMPLETED")
+            # Report success to orchestrator (include engine version)
+            engine_info = self.processor.get_engine_info() if hasattr(self.processor, "get_engine_info") else {}
+            engine_ver = f"{engine_info.get('engine', 'unknown')} {engine_info.get('version', '')}" if engine_info else None
+            await self.orchestrator.update_status(job_id, "COMPLETED", engine_version=engine_ver)
 
             # Ack message
             await self.queue.ack(msg_id)

@@ -12,7 +12,7 @@ class TestTextRawHandler:
     @pytest.fixture
     def handler(self):
         """Create handler instance."""
-        from app.handlers.text_raw import TextRawHandler
+        from app.handlers.ocr_text_raw import TextRawHandler
 
         # Try GPU first, fallback to CPU
         try:
@@ -23,7 +23,7 @@ class TestTextRawHandler:
     @pytest.mark.asyncio
     async def test_handler_initialization(self):
         """Should initialize PaddleOCR handler."""
-        from app.handlers.text_raw import TextRawHandler
+        from app.handlers.ocr_text_raw import TextRawHandler
 
         # Try GPU
         try:
@@ -141,11 +141,11 @@ class TestOCRProcessor:
         from app.core.processor import OCRProcessor
 
         processor = OCRProcessor()
-        assert "text_raw" in processor.handlers
+        assert "ocr_text_raw" in processor.handlers
 
     @pytest.mark.asyncio
-    async def test_processor_text_raw_method(self, test_image_with_text):
-        """Should process with text_raw method."""
+    async def test_processor_ocr_text_raw_method(self, test_image_with_text):
+        """Should process with ocr_text_raw method."""
         from app.core.processor import OCRProcessor
 
         processor = OCRProcessor()
@@ -154,7 +154,7 @@ class TestOCRProcessor:
         result = await processor.process(
             file_content=img_bytes,
             output_format="txt",
-            method="text_raw"
+            method="ocr_text_raw"
         )
 
         assert isinstance(result, bytes)

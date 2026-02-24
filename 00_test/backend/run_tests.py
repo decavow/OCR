@@ -217,12 +217,12 @@ async def test_upload(client: httpx.AsyncClient, result: TestResult):
         resp = await client.post(
             f"{API_V1}/upload",
             files=files,
-            params={"output_format": "json", "method": "text_raw", "tier": 0},
+            params={"output_format": "json", "method": "ocr_text_raw", "tier": 0},
             headers=headers
         )
         if resp.status_code == 200:
             data = resp.json()
-            if data.get("output_format") == "json" and data.get("method") == "text_raw":
+            if data.get("output_format") == "json" and data.get("method") == "ocr_text_raw":
                 result.add_pass("Upload with parameters")
             else:
                 result.add_fail("Upload with parameters", "Wrong parameters in response")

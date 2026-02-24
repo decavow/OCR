@@ -32,6 +32,15 @@ class BatchTooLarge(UploadError):
         )
 
 
+class BatchTotalSizeTooLarge(UploadError):
+    """Total batch size exceeds limit."""
+    def __init__(self, total_size: int, max_size: int):
+        super().__init__(
+            f"Total batch size {total_size} bytes exceeds limit {max_size} bytes",
+            code="BATCH_TOTAL_SIZE_TOO_LARGE"
+        )
+
+
 class ServiceNotAvailable(UploadError):
     """Requested method/tier has no approved service."""
     def __init__(self, method: str, tier: int):

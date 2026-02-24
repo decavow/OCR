@@ -21,23 +21,55 @@ class RequestRepository(BaseRepository[Request]):
             Request.deleted_at.is_(None)
         ).first()
 
+    def _build_user_query(
+        self,
+        user_id: str,
+        status: Optional[str] = None,
+        method: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ):
+        """Build filtered query for user requests."""
+        query = self.db.query(Request).filter(
+            Request.user_id == user_id,
+            Request.deleted_at.is_(None)
+        )
+        if status:
+            query = query.filter(Request.status == status)
+        if method:
+            query = query.filter(Request.method == method)
+        if date_from:
+            query = query.filter(Request.created_at >= date_from)
+        if date_to:
+            query = query.filter(Request.created_at <= date_to)
+        return query
+
     def get_by_user(
         self,
         user_id: str,
         skip: int = 0,
-        limit: int = 20
+        limit: int = 20,
+        status: Optional[str] = None,
+        method: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
     ) -> List[Request]:
-        """Get requests for user with pagination."""
-        return self.db.query(Request).filter(
-            Request.user_id == user_id,
-            Request.deleted_at.is_(None)
+        """Get requests for user with pagination and filters."""
+        return self._build_user_query(
+            user_id, status=status, method=method, date_from=date_from, date_to=date_to
         ).order_by(Request.created_at.desc()).offset(skip).limit(limit).all()
 
-    def count_by_user(self, user_id: str) -> int:
-        """Count requests for user."""
-        return self.db.query(Request).filter(
-            Request.user_id == user_id,
-            Request.deleted_at.is_(None)
+    def count_by_user(
+        self,
+        user_id: str,
+        status: Optional[str] = None,
+        method: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> int:
+        """Count requests for user with filters."""
+        return self._build_user_query(
+            user_id, status=status, method=method, date_from=date_from, date_to=date_to
         ).count()
 
     def get_by_status(self, status: str, limit: int = 100) -> List[Request]:
@@ -51,7 +83,7 @@ class RequestRepository(BaseRepository[Request]):
         self,
         user_id: str,
         file_count: int,
-        method: str = "text_raw",
+        method: str = "ocr_text_raw",
         tier: int = 0,
         output_format: str = "txt",
         retention_hours: int = 168,

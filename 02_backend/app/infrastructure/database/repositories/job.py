@@ -86,12 +86,16 @@ class JobRepository(BaseRepository[Job]):
         worker_id: str = None,
         error: str = None,
         retriable: bool = True,
+        engine_version: str = None,
     ) -> Job:
         """Update job status."""
         job.status = status
 
         if worker_id:
             job.worker_id = worker_id
+
+        if engine_version:
+            job.engine_version = engine_version
 
         if status == "PROCESSING":
             job.started_at = datetime.now(timezone.utc)

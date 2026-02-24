@@ -1,7 +1,7 @@
 # GET /requests, /requests/:id, POST /requests/:id/cancel
 
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
@@ -37,18 +37,24 @@ class RequestDetailResponse(RequestResponse):
 async def get_requests(
     page: int = 1,
     page_size: int = 20,
+    status: Optional[str] = Query(None, description="Filter by status (PROCESSING, COMPLETED, FAILED, etc.)"),
+    method: Optional[str] = Query(None, description="Filter by OCR method (ocr_text_raw, ocr_table, etc.)"),
+    date_from: Optional[datetime] = Query(None, description="Filter by created_at >= date_from (ISO 8601)"),
+    date_to: Optional[datetime] = Query(None, description="Filter by created_at <= date_to (ISO 8601)"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Get all requests (batches) for current user."""
+    """Get all requests (batches) for current user with optional filters."""
     request_repo = RequestRepository(db)
 
     # Calculate offset
     skip = (page - 1) * page_size
 
+    filter_kwargs = dict(status=status, method=method, date_from=date_from, date_to=date_to)
+
     # Get requests and total count
-    requests = request_repo.get_by_user(current_user.id, skip=skip, limit=page_size)
-    total = request_repo.count_by_user(current_user.id)
+    requests = request_repo.get_by_user(current_user.id, skip=skip, limit=page_size, **filter_kwargs)
+    total = request_repo.count_by_user(current_user.id, **filter_kwargs)
 
     return RequestListResponse(
         items=[RequestResponse.model_validate(r) for r in requests],

@@ -77,13 +77,13 @@ class TestUpload:
         resp = await client.post(
             f"{API_V1}/upload",
             files=files,
-            params={"method": "text_raw", "tier": 0},
+            params={"method": "ocr_text_raw", "tier": 0},
             headers=auth_headers
         )
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["method"] == "text_raw"
+        assert data["method"] == "ocr_text_raw"
         assert data["tier"] == 0
 
     @pytest.mark.asyncio

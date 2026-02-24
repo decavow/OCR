@@ -51,7 +51,7 @@ class TestQueueClient:
         from app.config import settings
 
         settings.nats_url = NATS_URL
-        settings.worker_filter_subject = "ocr.text_raw.tier0"
+        settings.worker_filter_subject = "ocr.ocr_text_raw.tier0"
         settings.worker_service_id = "test-worker"
 
         client = QueueClient()
@@ -69,7 +69,7 @@ class TestQueueClient:
         from app.config import settings
 
         settings.nats_url = NATS_URL
-        settings.worker_filter_subject = "ocr.text_raw.tier0"
+        settings.worker_filter_subject = "ocr.ocr_text_raw.tier0"
         settings.worker_service_id = "test-worker-empty"
 
         client = QueueClient()
@@ -98,14 +98,14 @@ class TestQueueClient:
         resp = await client.post(
             "/api/v1/upload",
             files=files,
-            params={"method": "text_raw", "tier": 0},
+            params={"method": "ocr_text_raw", "tier": 0},
             headers=auth_headers
         )
         assert resp.status_code == 200
 
         # Connect queue client and pull
         settings.nats_url = NATS_URL
-        settings.worker_filter_subject = "ocr.text_raw.tier0"
+        settings.worker_filter_subject = "ocr.ocr_text_raw.tier0"
         settings.worker_service_id = "test-worker-format"
 
         queue = QueueClient()

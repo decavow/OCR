@@ -50,7 +50,7 @@ class JobResultMetadata(BaseModel):
     method: str
     tier: str
     processing_time_ms: int
-    version: str
+    service_version: str
 
 
 class JobResultResponse(BaseModel):

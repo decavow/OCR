@@ -120,7 +120,7 @@ async def test_backend_flow():
             }
             params = {
                 "output_format": "txt",
-                "method": "text_raw",
+                "method": "ocr_text_raw",
                 "tier": 0,
             }
 

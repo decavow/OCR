@@ -47,14 +47,14 @@ class OCRProcessor:
         self.lang = lang
         self.use_gpu = use_gpu
 
-        # Paddle-VL registers "structured_extract" method instead of "text_raw"
+        # Paddle-VL registers "structured_extract" method instead of "ocr_text_raw"
         if engine == ENGINE_PADDLE_VL:
             self.handlers = {
                 "structured_extract": create_handler(engine, use_gpu, lang),
             }
         else:
             self.handlers = {
-                "text_raw": create_handler(engine, use_gpu, lang),
+                "ocr_text_raw": create_handler(engine, use_gpu, lang),
             }
 
     def get_engine_info(self) -> Dict[str, Any]:
@@ -72,7 +72,7 @@ class OCRProcessor:
         self,
         file_content: bytes,
         output_format: str,
-        method: str = "text_raw",
+        method: str = "ocr_text_raw",
     ) -> bytes:
         """
         Process file with OCR.
@@ -80,7 +80,7 @@ class OCRProcessor:
         Args:
             file_content: Image/PDF bytes
             output_format: Output format (txt, json)
-            method: OCR method (text_raw, etc.)
+            method: OCR method (ocr_text_raw, etc.)
 
         Returns:
             Processed result as bytes

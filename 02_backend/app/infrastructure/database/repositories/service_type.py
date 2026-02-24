@@ -96,7 +96,7 @@ class ServiceTypeRepository(BaseRepository[ServiceType]):
             description=description,
             status=status,
             access_key=access_key,
-            allowed_methods=json.dumps(allowed_methods or ["text_raw"]),
+            allowed_methods=json.dumps(allowed_methods or ["ocr_text_raw"]),
             allowed_tiers=json.dumps(allowed_tiers or [0]),
             supported_output_formats=json.dumps(supported_output_formats or ["txt", "json"]),
             engine_info=json.dumps(engine_info) if engine_info else None,

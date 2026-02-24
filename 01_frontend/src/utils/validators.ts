@@ -1,6 +1,6 @@
 // Client-side file validation
 
-import { MAX_FILE_SIZE, MAX_BATCH_SIZE, ALLOWED_FILE_TYPES } from '../config'
+import { MAX_FILE_SIZE, MAX_BATCH_SIZE, MAX_TOTAL_BATCH_SIZE, ALLOWED_FILE_TYPES } from '../config'
 
 export interface ValidationError {
   file: File
@@ -30,6 +30,16 @@ export function validateBatch(files: File[]): ValidationError[] {
     files.slice(MAX_BATCH_SIZE).forEach((file) => {
       errors.push({ file, error: `Batch limit is ${MAX_BATCH_SIZE} files` })
     })
+  }
+
+  // Check total batch size
+  const totalSize = files.reduce((sum, f) => sum + f.size, 0)
+  if (totalSize > MAX_TOTAL_BATCH_SIZE) {
+    errors.push({
+      file: files[0],
+      error: `Total batch size ${Math.round(totalSize / 1024 / 1024)}MB exceeds ${MAX_TOTAL_BATCH_SIZE / 1024 / 1024}MB limit`,
+    })
+    return errors
   }
 
   // Validate each file

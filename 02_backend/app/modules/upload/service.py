@@ -18,7 +18,7 @@ from app.infrastructure.database.repositories import (
 from app.infrastructure.storage import MinIOStorageService, generate_object_key
 from app.infrastructure.queue import NATSQueueService, JobMessage, get_subject
 from app.config import settings
-from .validators import validate_file, validate_batch
+from .validators import validate_file, validate_batch, validate_total_batch_size
 from .exceptions import ServiceNotAvailable
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class UploadService:
         files: List[UploadFile],
         output_format: str = "txt",
         retention_hours: int = 168,
-        method: str = "text_raw",
+        method: str = "ocr_text_raw",
         tier: int = 0,
     ) -> Request:
         """Process file upload: validate, store, create request and jobs."""
@@ -70,6 +70,10 @@ class UploadService:
         for upload_file in files:
             validated = await self._validate_single_file(upload_file)
             validated_files.append(validated)
+
+        # Step 2.5: Validate total batch size (200MB limit)
+        total_size = sum(len(v.content) for v in validated_files)
+        validate_total_batch_size(total_size)
 
         # Step 3: All files valid - now create Request record
         expires_at = datetime.now(timezone.utc) + timedelta(hours=retention_hours)

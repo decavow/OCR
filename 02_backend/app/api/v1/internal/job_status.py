@@ -17,6 +17,7 @@ class JobStatusUpdate(BaseModel):
     status: str
     error: Optional[str] = None
     retriable: bool = True
+    engine_version: Optional[str] = None
 
 
 @router.patch("/jobs/{job_id}/status")
@@ -57,6 +58,7 @@ async def update_job_status(
         worker_id=service_type.id,
         error=data.error,
         retriable=data.retriable,
+        engine_version=data.engine_version,
     )
 
     return {

@@ -38,7 +38,7 @@ class ServiceRepository(BaseRepository[Service]):
         existing = self.get(service_id)
         if existing:
             existing.access_key = access_key
-            existing.allowed_methods = json.dumps(allowed_methods or ["text_raw"])
+            existing.allowed_methods = json.dumps(allowed_methods or ["ocr_text_raw"])
             existing.allowed_tiers = json.dumps(allowed_tiers or [0])
             existing.enabled = True
             return self.update(existing)
@@ -46,7 +46,7 @@ class ServiceRepository(BaseRepository[Service]):
         service = Service(
             id=service_id,
             access_key=access_key,
-            allowed_methods=json.dumps(allowed_methods or ["text_raw"]),
+            allowed_methods=json.dumps(allowed_methods or ["ocr_text_raw"]),
             allowed_tiers=json.dumps(allowed_tiers or [0]),
         )
         return self.create(service)

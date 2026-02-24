@@ -15,7 +15,7 @@ from nats.errors import TimeoutError as NatsTimeoutError
 NATS_URL = "nats://localhost:4222"
 STREAM_NAME = "OCR_JOBS"
 DLQ_STREAM_NAME = "OCR_DLQ"
-TEST_SUBJECT = "ocr.text_raw.tier0"
+TEST_SUBJECT = "ocr.ocr_text_raw.tier0"
 
 
 async def test_connection():
@@ -96,7 +96,7 @@ async def test_publish_consume():
     test_message = {
         "job_id": "test-job-001",
         "file_id": "test-file-001",
-        "method": "text_raw",
+        "method": "ocr_text_raw",
         "tier": 0,
         "timestamp": datetime.now().isoformat(),
     }

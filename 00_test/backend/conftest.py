@@ -21,7 +21,7 @@ os.environ["MINIO_ACCESS_KEY"] = "minioadmin"
 os.environ["MINIO_SECRET_KEY"] = "minioadmin"
 os.environ["NATS_URL"] = "nats://localhost:4222"
 os.environ["SECRET_KEY"] = "test-secret-key"
-os.environ["SEED_SERVICES"] = "test-worker:sk_test_key:text_raw:0"
+os.environ["SEED_SERVICES"] = "test-worker:sk_test_key:ocr_text_raw:0"
 
 # Test constants
 BASE_URL = "http://localhost:8000"

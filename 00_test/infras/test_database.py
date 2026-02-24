@@ -210,7 +210,7 @@ def test_request_job_file_flow():
         request = request_repo.create_request(
             user_id=user.id,
             total_files=2,
-            method="text_raw",
+            method="ocr_text_raw",
             tier=0,
             output_format="txt",
         )
@@ -237,14 +237,14 @@ def test_request_job_file_flow():
         job1 = job_repo.create_job(
             request_id=request.id,
             file_id=file1.id,
-            method="text_raw",
+            method="ocr_text_raw",
             tier=0,
             output_format="txt",
         )
         job2 = job_repo.create_job(
             request_id=request.id,
             file_id=file2.id,
-            method="text_raw",
+            method="ocr_text_raw",
             tier=0,
             output_format="txt",
         )
@@ -318,7 +318,7 @@ def test_service_heartbeat():
         service = service_repo.create_service(
             service_id="worker-ocr-text-tier0",
             access_key="sk_test_key_123",
-            allowed_methods=["text_raw"],
+            allowed_methods=["ocr_text_raw"],
             allowed_tiers=[0],
         )
         print(f"  [OK] Created service: {service.id}")
@@ -332,13 +332,13 @@ def test_service_heartbeat():
             return False
 
         # Check can_handle
-        if service_repo.can_handle(service, "text_raw", 0):
-            print(f"  [OK] Service can handle text_raw tier 0")
+        if service_repo.can_handle(service, "ocr_text_raw", 0):
+            print(f"  [OK] Service can handle ocr_text_raw tier 0")
         else:
             print(f"  [FAIL] can_handle check failed")
             return False
 
-        if not service_repo.can_handle(service, "text_raw", 1):
+        if not service_repo.can_handle(service, "ocr_text_raw", 1):
             print(f"  [OK] Service cannot handle tier 1")
         else:
             print(f"  [FAIL] Should not handle tier 1")

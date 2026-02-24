@@ -22,9 +22,11 @@ interface UploadConfigProps {
 }
 
 const RETENTION_LABELS: Record<number, string> = {
-  24: '1 day',
-  72: '3 days',
-  168: '1 week',
+  1: '1 hour',
+  6: '6 hours',
+  12: '12 hours',
+  24: '1 day (default)',
+  168: '7 days',
   720: '30 days',
 }
 
