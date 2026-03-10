@@ -11,6 +11,7 @@ const statusStyles: Record<string, string> = {
   partial_success: 'bg-warning/20 text-warning',
   failed: 'bg-destructive/20 text-destructive',
   cancelled: 'bg-muted text-muted-foreground',
+  dead_letter: 'bg-destructive/30 text-destructive',
 }
 
 export default function BatchStatus({ status }: BatchStatusProps) {

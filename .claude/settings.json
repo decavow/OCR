@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dpkg -l:*)"
+      "Bash(dpkg -l:*)",
+      "Bash(docker compose down -v)",
+      "Bash(find /c/Projects/OCR/02_backend/app/api/v1/endpoints -name \"*.py\" -exec grep -l \"upload\\\\|batch\\\\|submit\" {} ;)"
     ]
   }
 }

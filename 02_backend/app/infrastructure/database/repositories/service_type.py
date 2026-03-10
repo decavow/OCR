@@ -122,10 +122,25 @@ class ServiceTypeRepository(BaseRepository[ServiceType]):
         """
         Register a new service type (from worker registration).
         Creates with PENDING status, no access_key.
+        If type already exists, update mutable fields (methods, tiers, engine_info)
+        but preserve status and access_key.
         """
         existing = self.get(type_id)
         if existing:
-            return existing  # Don't modify existing type
+            # Update mutable fields from worker registration
+            if allowed_methods is not None:
+                existing.allowed_methods = json.dumps(allowed_methods)
+            if allowed_tiers is not None:
+                existing.allowed_tiers = json.dumps(allowed_tiers)
+            if supported_output_formats is not None:
+                existing.supported_output_formats = json.dumps(supported_output_formats)
+            if engine_info is not None:
+                existing.engine_info = json.dumps(engine_info)
+            if description is not None:
+                existing.description = description
+            if dev_contact is not None:
+                existing.dev_contact = dev_contact
+            return self.update(existing)
 
         return self.create_or_update(
             type_id=type_id,

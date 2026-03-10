@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     secret_key: str = "your-secret-key-change-in-production"
     session_expire_hours: int = 24
 
+    # Job retry
+    max_job_retries: int = 3
+
+    # Rate limiting
+    rate_limit_enabled: bool = True
+
     class Config:
         env_file = ".env"
 

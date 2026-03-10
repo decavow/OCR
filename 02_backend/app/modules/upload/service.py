@@ -112,6 +112,7 @@ class UploadService:
             )
             if active_count > 0:
                 return
+        logger.warning("No service available for method=%s tier=%d", method, tier)
         raise ServiceNotAvailable(method, tier)
 
     async def _validate_single_file(self, upload_file: UploadFile) -> ValidatedFile:

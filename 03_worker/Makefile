@@ -18,6 +18,7 @@
 #   2. Create deploy/<name>/requirements.txt (engine-specific deps)
 #   3. Create deploy/<name>/docker-compose.yml + .env.example
 #   4. Add build-<name> and up-<name> targets below
+# uvicorn app.main:app --reload --port 8000
 
 .PHONY: build-base-gpu build-base-cpu build-paddle build-paddle-vl build-tesseract build-all
 .PHONY: up-paddle up-paddle-vl up-tesseract down-paddle down-paddle-vl down-tesseract
@@ -25,6 +26,7 @@
 # === Base Images ===
 
 build-base-gpu:
+
 	docker build -f Dockerfile.base-gpu -t ocr-worker-base-gpu:latest .
 
 build-base-cpu:

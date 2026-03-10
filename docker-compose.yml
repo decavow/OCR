@@ -84,7 +84,24 @@ services:
     networks:
       - ocr-network
 
+  # === FRONTEND ===
+  frontend:
+    build:
+      context: ./01_frontend
+      args:
+        VITE_API_BASE_URL: /api/v1
+    container_name: ocr-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - ocr-network
+
 networks:
   ocr-network:
     name: ocr-network
     driver: bridge
+
+# docker compose up -d minio nats

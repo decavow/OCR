@@ -7,8 +7,9 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from app.api.v1.schemas.request import RequestResponse, RequestListResponse
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_job_service
 from app.infrastructure.database.repositories import RequestRepository, JobRepository
+from app.modules.job.service import JobService
 
 router = APIRouter()
 
@@ -67,27 +68,16 @@ async def get_requests(
 @router.get("/{request_id}", response_model=RequestDetailResponse)
 async def get_request(
     request_id: str,
-    db: Session = Depends(get_db),
+    job_service: JobService = Depends(get_job_service),
     current_user=Depends(get_current_user),
 ):
     """Get a specific request with jobs."""
-    request_repo = RequestRepository(db)
-    job_repo = JobRepository(db)
-
-    # Get request
-    request = request_repo.get_active(request_id)
-    if not request:
+    result = await job_service.get_request_with_jobs(request_id, current_user.id)
+    if not result:
         raise HTTPException(status_code=404, detail="Request not found")
 
-    # Check ownership
-    if request.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # Get jobs for this request
-    jobs = job_repo.get_by_request(request_id)
-
-    # Build response
-    response = RequestDetailResponse(
+    request, jobs = result
+    return RequestDetailResponse(
         id=request.id,
         user_id=request.user_id,
         method=request.method,
@@ -103,38 +93,15 @@ async def get_request(
         jobs=[JobSummary.model_validate(j) for j in jobs],
     )
 
-    return response
-
 
 @router.post("/{request_id}/cancel")
 async def cancel_request(
     request_id: str,
-    db: Session = Depends(get_db),
+    job_service: JobService = Depends(get_job_service),
     current_user=Depends(get_current_user),
 ):
     """Cancel a request (only cancels QUEUED jobs)."""
-    request_repo = RequestRepository(db)
-    job_repo = JobRepository(db)
-
-    # Get request
-    request = request_repo.get_active(request_id)
-    if not request:
-        raise HTTPException(status_code=404, detail="Request not found")
-
-    # Check ownership
-    if request.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # Cancel queued jobs
-    queued_jobs = job_repo.get_queued_by_request(request_id)
-    cancelled_count = job_repo.cancel_jobs(queued_jobs)
-
-    # Update request status if all jobs cancelled
-    if cancelled_count == request.total_files:
-        request_repo.update_status(request, "CANCELLED")
-
-    return {
-        "success": True,
-        "cancelled_jobs": cancelled_count,
-        "message": f"Cancelled {cancelled_count} queued jobs",
-    }
+    result = await job_service.cancel_request(request_id, current_user.id)
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result

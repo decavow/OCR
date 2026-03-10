@@ -304,6 +304,34 @@ class Heartbeat(Base):
 
 
 # =============================================================================
+# Audit Log Model
+# =============================================================================
+
+class AuditLog(Base):
+    """Audit trail for admin actions."""
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    actor_email: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(50))  # APPROVE, REJECT, DISABLE, ENABLE, DELETE
+    entity_type: Mapped[str] = mapped_column(String(50))  # service_type, service_instance, user
+    entity_id: Mapped[str] = mapped_column(String(150))
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+
+    __table_args__ = (
+        Index("ix_audit_logs_timestamp", "timestamp"),
+        Index("ix_audit_logs_actor_email", "actor_email"),
+        Index("ix_audit_logs_entity", "entity_type", "entity_id"),
+        Index("ix_audit_logs_action", "action"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AuditLog {self.action} {self.entity_type}/{self.entity_id} by {self.actor_email}>"
+
+
+# =============================================================================
 # Legacy Service Model (kept for migration compatibility)
 # =============================================================================
 

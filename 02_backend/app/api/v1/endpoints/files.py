@@ -1,5 +1,6 @@
 # GET /files/:id/original-url, /files/:id/result-url, /files/:id/download
 
+import logging
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -11,6 +12,7 @@ from app.infrastructure.database.repositories import FileRepository, RequestRepo
 from app.infrastructure.storage.exceptions import ObjectNotFoundError
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -150,6 +152,7 @@ async def download_file(
         try:
             content = await storage.download(settings.minio_bucket_uploads, file.object_key)
         except ObjectNotFoundError:
+            logger.warning("Original file not found in storage: file_id=%s key=%s", file_id, file.object_key)
             raise HTTPException(status_code=404, detail="Original file not found")
 
         return Response(
@@ -177,6 +180,7 @@ async def download_file(
         try:
             content = await storage.download(settings.minio_bucket_results, job.result_path)
         except ObjectNotFoundError:
+            logger.warning("Result file not found in storage: file_id=%s path=%s", file_id, job.result_path)
             raise HTTPException(status_code=404, detail="Result file not found")
 
         # Determine filename and content type

@@ -1,11 +1,12 @@
 # POST /internal/heartbeat
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Header, Depends, HTTPException
+from fastapi import APIRouter, Header, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_request_id
 from app.api.v1.schemas.heartbeat import HeartbeatPayload, HeartbeatResponse
 from app.infrastructure.database.repositories import (
     ServiceTypeRepository,
@@ -14,12 +15,15 @@ from app.infrastructure.database.repositories import (
 )
 from app.infrastructure.database.models import ServiceTypeStatus, ServiceInstanceStatus
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
 @router.post("/heartbeat", response_model=HeartbeatResponse)
 async def receive_heartbeat(
     data: HeartbeatPayload,
+    request: Request,
     x_access_key: Optional[str] = Header(None, alias="X-Access-Key"),
     db: Session = Depends(get_db),
 ):
@@ -38,6 +42,7 @@ async def receive_heartbeat(
     - "drain": Type was disabled, finish current job then stop
     - "shutdown": Type was rejected, shutdown immediately
     """
+    rid = get_request_id(request)
     service_instance_repo = ServiceInstanceRepository(db)
     service_type_repo = ServiceTypeRepository(db)
     heartbeat_repo = HeartbeatRepository(db)
@@ -45,6 +50,10 @@ async def receive_heartbeat(
     # Get instance
     instance = service_instance_repo.get(data.instance_id)
     if not instance:
+        logger.warning(
+            "Heartbeat from unknown instance: %s", data.instance_id,
+            extra={"request_id": rid, "instance_id": data.instance_id},
+        )
         raise HTTPException(
             status_code=404,
             detail=f"Instance '{data.instance_id}' not found. Please register first."
@@ -63,11 +72,21 @@ async def receive_heartbeat(
         # If instance should have key (not first heartbeat after approval)
         if instance.status in (ServiceInstanceStatus.ACTIVE, ServiceInstanceStatus.PROCESSING):
             if not x_access_key:
+                logger.warning(
+                    "Missing access key for instance %s (type=%s)",
+                    data.instance_id, instance.service_type_id,
+                    extra={"request_id": rid, "instance_id": data.instance_id},
+                )
                 raise HTTPException(
                     status_code=401,
                     detail="X-Access-Key header required for approved service types"
                 )
             if x_access_key != service_type.access_key:
+                logger.warning(
+                    "Invalid access key for instance %s (type=%s)",
+                    data.instance_id, instance.service_type_id,
+                    extra={"request_id": rid, "instance_id": data.instance_id},
+                )
                 raise HTTPException(
                     status_code=403,
                     detail="Invalid access key"
@@ -105,6 +124,11 @@ async def receive_heartbeat(
             access_key = service_type.access_key
             # Activate the instance
             service_instance_repo.activate(instance)
+            logger.info(
+                "Instance %s approved, sending access key (type=%s)",
+                data.instance_id, instance.service_type_id,
+                extra={"request_id": rid, "instance_id": data.instance_id, "service_type": instance.service_type_id},
+            )
         else:
             action = "continue"
 
@@ -113,12 +137,22 @@ async def receive_heartbeat(
         # Mark instance as draining if not already
         if instance.status not in (ServiceInstanceStatus.DRAINING, ServiceInstanceStatus.WAITING):
             service_instance_repo.mark_draining(instance)
+            logger.info(
+                "Instance %s entering drain mode (type=%s)",
+                data.instance_id, instance.service_type_id,
+                extra={"request_id": rid, "instance_id": data.instance_id, "service_type": instance.service_type_id},
+            )
 
     elif service_type.status == ServiceTypeStatus.REJECTED:
         action = "shutdown"
         rejection_reason = service_type.rejection_reason or "Service type rejected"
         # Mark instance as dead
         service_instance_repo.mark_dead(instance)
+        logger.warning(
+            "Instance %s shutdown signal sent (type=%s rejected: %s)",
+            data.instance_id, instance.service_type_id, rejection_reason,
+            extra={"request_id": rid, "instance_id": data.instance_id, "service_type": instance.service_type_id},
+        )
 
     return HeartbeatResponse(
         success=True,

@@ -1,7 +1,7 @@
 # Dependencies: get_db, get_current_user, get_storage, get_queue
 
-from typing import Generator
-from fastapi import Depends, HTTPException, status, Header
+from typing import Generator, Optional
+from fastapi import Depends, HTTPException, Request, status, Header
 from sqlalchemy.orm import Session
 
 from app.infrastructure.database.connection import SessionLocal
@@ -94,3 +94,14 @@ def get_queue():
     """Get queue service."""
     from app.core.lifespan import queue_service
     return queue_service
+
+
+def get_job_service(db: Session = Depends(get_db), queue=Depends(get_queue)):
+    """Get JobService instance."""
+    from app.modules.job.service import JobService
+    return JobService(db, queue)
+
+
+def get_request_id(request: Request) -> Optional[str]:
+    """Get correlation request_id from request state."""
+    return getattr(request.state, "request_id", None)

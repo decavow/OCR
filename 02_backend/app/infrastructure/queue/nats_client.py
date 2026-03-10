@@ -77,8 +77,8 @@ class NATSQueueService(IQueueService):
             try:
                 await self.js.add_stream(name=name, subjects=subjects)
                 logger.info(f"Created stream: {name}")
-            except Exception:
-                pass  # Stream might already exist
+            except Exception as e:
+                logger.warning("Failed to create stream %s: %s", name, e)
 
     async def publish(self, subject: str, message: JobMessage) -> None:
         """Publish job message to subject."""

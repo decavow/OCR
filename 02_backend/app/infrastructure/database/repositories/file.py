@@ -63,6 +63,12 @@ class FileRepository(BaseRepository[File]):
         file.deleted_at = datetime.now(timezone.utc)
         return self.update(file)
 
+    def get_by_request_include_deleted(self, request_id: str) -> List[File]:
+        """Get all files for a request, including soft-deleted ones."""
+        return self.db.query(File).filter(
+            File.request_id == request_id
+        ).all()
+
     def get_total_size_by_request(self, request_id: str) -> int:
         """Get total size of all files in a request."""
         from sqlalchemy import func

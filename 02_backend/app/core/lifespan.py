@@ -1,6 +1,7 @@
 # Application startup/shutdown lifecycle
 
 from app.core.logging import setup_logging, get_logger
+from app.core.scheduler import init_scheduler, shutdown_scheduler
 from app.infrastructure.database.connection import engine, SessionLocal, _run_migrations
 from app.infrastructure.database.models import Base, ServiceTypeStatus
 from app.infrastructure.database.repositories import ServiceTypeRepository
@@ -51,6 +52,10 @@ async def startup() -> None:
     if settings.seed_services:
         seed_services(settings.seed_services)
 
+    # Scheduler + periodic tasks
+    init_scheduler()
+    _register_periodic_tasks()
+
     logger.info("Application started successfully")
 
 
@@ -63,11 +68,61 @@ async def shutdown() -> None:
 
     logger.info("Shutting down application...")
 
+    shutdown_scheduler()
+
     if queue_service:
         await queue_service.disconnect()
         logger.info("NATS disconnected")
 
     logger.info("Application shutdown complete")
+
+
+def _register_periodic_tasks() -> None:
+    """Register all periodic background tasks in the scheduler."""
+    from app.core.scheduler import scheduler
+
+    async def heartbeat_check():
+        db = SessionLocal()
+        try:
+            from app.modules.job.orchestrator import RetryOrchestrator
+            from app.modules.job.heartbeat_monitor import HeartbeatMonitor
+            orchestrator = RetryOrchestrator(db, queue_service)
+            monitor = HeartbeatMonitor(db, retry_orchestrator=orchestrator)
+            await monitor.run_check()
+        except Exception as e:
+            logger.error(f"Heartbeat check failed: {e}")
+        finally:
+            db.close()
+
+    scheduler.add_job(heartbeat_check, 'interval', seconds=60, id='heartbeat_check')
+    logger.info("Registered periodic task: heartbeat_check (60s)")
+
+    async def retention_cleanup():
+        db = SessionLocal()
+        try:
+            from app.modules.cleanup.service import RetentionCleanupService
+            svc = RetentionCleanupService(db, storage_service)
+            await svc.cleanup_expired()
+        except Exception as e:
+            logger.error(f"Retention cleanup failed: {e}")
+        finally:
+            db.close()
+
+    async def purge_deleted():
+        db = SessionLocal()
+        try:
+            from app.modules.cleanup.service import RetentionCleanupService
+            svc = RetentionCleanupService(db, storage_service)
+            await svc.purge_deleted(older_than_hours=168)
+        except Exception as e:
+            logger.error(f"Purge deleted failed: {e}")
+        finally:
+            db.close()
+
+    scheduler.add_job(retention_cleanup, 'interval', hours=1, id='retention_cleanup')
+    logger.info("Registered periodic task: retention_cleanup (1h)")
+    scheduler.add_job(purge_deleted, 'interval', hours=24, id='purge_deleted')
+    logger.info("Registered periodic task: purge_deleted (24h)")
 
 
 def seed_services(seed_config: str) -> None:

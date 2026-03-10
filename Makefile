@@ -6,6 +6,9 @@
 
 # === Core (Infrastructure + Backend) ===
 
+infra-only:
+	docker compose up -d minio nats
+
 up:
 	docker compose up -d
 
@@ -33,6 +36,7 @@ health:
 
 # === Workers (base image + per-worker layer) ===
 # See 03_worker/Makefile for detailed worker build targets
+# docker build -f Dockerfile.base-gpu -t ocr-worker-base-gpu:latest .
 
 worker-paddle:
 	$(MAKE) -C 03_worker up-paddle
@@ -70,3 +74,5 @@ demote:
 all: up workers
 
 all-down: workers-down down
+# docker compose exec backend python -m app.cli create-admin admin@gmail.com admin123
+# python -m app.cli create-admin admin@gmail.com admin123 

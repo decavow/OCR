@@ -1,5 +1,6 @@
 # POST /auth/register, /auth/login, /auth/logout, GET /auth/me
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ from app.modules.auth.exceptions import (
     UserAlreadyExists,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -36,6 +38,7 @@ async def register(
             expires_at=session.expires_at,
         )
     except UserAlreadyExists as e:
+        logger.info("Registration failed - user already exists: %s", data.email)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -54,6 +57,7 @@ async def login(
             expires_at=session.expires_at,
         )
     except InvalidCredentials as e:
+        logger.warning("Login failed - invalid credentials: email=%s", data.email)
         raise HTTPException(status_code=401, detail=str(e))
 
 

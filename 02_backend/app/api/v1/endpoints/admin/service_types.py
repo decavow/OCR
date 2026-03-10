@@ -1,14 +1,17 @@
 # Admin endpoints for Service Types
 
 import json
+import logging
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_admin_user
+from app.api.deps import get_db, get_admin_user, get_request_id
 from app.infrastructure.database.models import User, ServiceTypeStatus
-from app.infrastructure.database.repositories import ServiceTypeRepository
+from app.infrastructure.database.repositories import ServiceTypeRepository, AuditLogRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -99,6 +102,7 @@ async def get_service_type(
 @router.post("/{type_id}/approve", response_model=ServiceTypeResponse)
 async def approve_service_type(
     type_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(get_admin_user),
 ):
@@ -109,6 +113,7 @@ async def approve_service_type(
     - All WAITING instances become ACTIVE
     - Instances receive access_key via next heartbeat
     """
+    rid = get_request_id(request)
     service_type_repo = ServiceTypeRepository(db)
     service_type = service_type_repo.get(type_id)
 
@@ -127,7 +132,18 @@ async def approve_service_type(
     try:
         service_type = service_type_repo.approve(service_type, approved_by=admin.email)
     except ValueError as e:
+        logger.warning("Approve failed for service type %s: %s", type_id, e)
         raise HTTPException(status_code=400, detail=str(e))
+
+    logger.warning(
+        "APPROVE service type: %s by %s, allowed_methods=%s",
+        type_id, admin.email, service_type.allowed_methods,
+        extra={"request_id": rid, "action": "APPROVE", "actor_email": admin.email, "entity_type": "service_type", "entity_id": type_id},
+    )
+    AuditLogRepository(db).record(
+        actor_email=admin.email, action="APPROVE", entity_type="service_type",
+        entity_id=type_id, details={"allowed_methods": json.loads(service_type.allowed_methods)}, request_id=rid,
+    )
 
     return _build_response(service_type, service_type_repo)
 
@@ -136,6 +152,7 @@ async def approve_service_type(
 async def reject_service_type(
     type_id: str,
     data: RejectRequest,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(get_admin_user),
 ):
@@ -145,6 +162,7 @@ async def reject_service_type(
     - All instances receive shutdown signal via next heartbeat
     - Cannot be undone - must delete and re-register
     """
+    rid = get_request_id(request)
     service_type_repo = ServiceTypeRepository(db)
     service_type = service_type_repo.get(type_id)
 
@@ -160,7 +178,18 @@ async def reject_service_type(
     try:
         service_type = service_type_repo.reject(service_type, data.reason)
     except ValueError as e:
+        logger.warning("Reject failed for service type %s: %s", type_id, e)
         raise HTTPException(status_code=400, detail=str(e))
+
+    logger.warning(
+        "REJECT service type: %s by %s, reason=%s",
+        type_id, admin.email, data.reason,
+        extra={"request_id": rid, "action": "REJECT", "actor_email": admin.email, "entity_type": "service_type", "entity_id": type_id},
+    )
+    AuditLogRepository(db).record(
+        actor_email=admin.email, action="REJECT", entity_type="service_type",
+        entity_id=type_id, details={"reason": data.reason}, request_id=rid,
+    )
 
     return _build_response(service_type, service_type_repo)
 
@@ -168,6 +197,7 @@ async def reject_service_type(
 @router.post("/{type_id}/disable", response_model=ServiceTypeResponse)
 async def disable_service_type(
     type_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(get_admin_user),
 ):
@@ -178,6 +208,7 @@ async def disable_service_type(
     - Instances finish current job then stop accepting new jobs
     - Can be re-enabled with /enable
     """
+    rid = get_request_id(request)
     service_type_repo = ServiceTypeRepository(db)
     service_type = service_type_repo.get(type_id)
 
@@ -193,7 +224,18 @@ async def disable_service_type(
     try:
         service_type = service_type_repo.disable(service_type)
     except ValueError as e:
+        logger.warning("Disable failed for service type %s: %s", type_id, e)
         raise HTTPException(status_code=400, detail=str(e))
+
+    logger.warning(
+        "DISABLE service type: %s by %s",
+        type_id, admin.email,
+        extra={"request_id": rid, "action": "DISABLE", "actor_email": admin.email, "entity_type": "service_type", "entity_id": type_id},
+    )
+    AuditLogRepository(db).record(
+        actor_email=admin.email, action="DISABLE", entity_type="service_type",
+        entity_id=type_id, request_id=rid,
+    )
 
     return _build_response(service_type, service_type_repo)
 
@@ -201,6 +243,7 @@ async def disable_service_type(
 @router.post("/{type_id}/enable", response_model=ServiceTypeResponse)
 async def enable_service_type(
     type_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(get_admin_user),
 ):
@@ -210,6 +253,7 @@ async def enable_service_type(
     - All WAITING/DRAINING instances become ACTIVE
     - Instances resume accepting jobs
     """
+    rid = get_request_id(request)
     service_type_repo = ServiceTypeRepository(db)
     service_type = service_type_repo.get(type_id)
 
@@ -225,7 +269,18 @@ async def enable_service_type(
     try:
         service_type = service_type_repo.enable(service_type)
     except ValueError as e:
+        logger.warning("Enable failed for service type %s: %s", type_id, e)
         raise HTTPException(status_code=400, detail=str(e))
+
+    logger.info(
+        "ENABLE service type: %s by %s",
+        type_id, admin.email,
+        extra={"request_id": rid, "action": "ENABLE", "actor_email": admin.email, "entity_type": "service_type", "entity_id": type_id},
+    )
+    AuditLogRepository(db).record(
+        actor_email=admin.email, action="ENABLE", entity_type="service_type",
+        entity_id=type_id, request_id=rid,
+    )
 
     return _build_response(service_type, service_type_repo)
 
@@ -233,6 +288,7 @@ async def enable_service_type(
 @router.delete("/{type_id}")
 async def delete_service_type(
     type_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(get_admin_user),
 ):
@@ -241,11 +297,22 @@ async def delete_service_type(
 
     Use this to clean up rejected types before re-registering with same name.
     """
+    rid = get_request_id(request)
     service_type_repo = ServiceTypeRepository(db)
     service_type = service_type_repo.get(type_id)
 
     if not service_type:
         raise HTTPException(status_code=404, detail="Service type not found")
+
+    logger.warning(
+        "DELETE service type: %s by %s (was %s)",
+        type_id, admin.email, service_type.status,
+        extra={"request_id": rid, "action": "DELETE", "actor_email": admin.email, "entity_type": "service_type", "entity_id": type_id},
+    )
+    AuditLogRepository(db).record(
+        actor_email=admin.email, action="DELETE", entity_type="service_type",
+        entity_id=type_id, details={"previous_status": service_type.status}, request_id=rid,
+    )
 
     service_type_repo.delete_with_instances(service_type)
 

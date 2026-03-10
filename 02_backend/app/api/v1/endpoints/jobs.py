@@ -1,46 +1,40 @@
 # GET /jobs/:id, /jobs/:id/result (text content)
 
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.v1.schemas.job import JobResponse, JobResultResponse, JobResultMetadata
-from app.api.deps import get_current_user, get_db, get_storage
+from app.api.deps import get_current_user, get_db, get_storage, get_job_service
 from app.infrastructure.database.repositories import JobRepository, RequestRepository, FileRepository
 from app.infrastructure.storage.exceptions import ObjectNotFoundError
+from app.modules.job.service import JobService
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: str,
-    db: Session = Depends(get_db),
+    job_service: JobService = Depends(get_job_service),
     current_user=Depends(get_current_user),
 ):
     """Get job status."""
-    job_repo = JobRepository(db)
-    request_repo = RequestRepository(db)
-
-    # Get job
-    job = job_repo.get_active(job_id)
+    job = await job_service.get_job(job_id, current_user.id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-
-    # Check ownership via request
-    request = request_repo.get_active(job.request_id)
-    if not request or request.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
 
     # Parse error history
     error_history = []
     if job.error_history:
         try:
             error_history = json.loads(job.error_history)
-        except:
-            pass
+        except Exception as e:
+            logger.debug("Failed to parse error_history for job %s: %s", job_id, e)
 
     return JobResponse(
         id=job.id,
@@ -98,6 +92,7 @@ async def get_job_result(
     try:
         content = await storage.download(settings.minio_bucket_results, job.result_path)
     except ObjectNotFoundError:
+        logger.warning("Result file not found in storage: job_id=%s path=%s", job_id, job.result_path)
         raise HTTPException(status_code=404, detail="Result file not found in storage")
 
     text = content.decode("utf-8")
@@ -115,8 +110,8 @@ async def get_job_result(
         try:
             data = json.loads(text)
             return data
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            logger.debug("Result is not valid JSON for job %s: %s", job_id, e)
 
     # Return structured response
     lines = text.strip().split("\n") if text.strip() else []
@@ -177,6 +172,7 @@ async def download_job_result(
     try:
         content = await storage.download(settings.minio_bucket_results, job.result_path)
     except ObjectNotFoundError:
+        logger.warning("Result file not found for download: job_id=%s path=%s", job_id, job.result_path)
         raise HTTPException(status_code=404, detail="Result file not found")
 
     content_type = "application/json" if ext == "json" else "text/plain"
@@ -191,36 +187,13 @@ async def download_job_result(
 @router.post("/{job_id}/cancel")
 async def cancel_job(
     job_id: str,
-    db: Session = Depends(get_db),
+    job_service: JobService = Depends(get_job_service),
     current_user=Depends(get_current_user),
 ):
     """Cancel a single job (only if QUEUED)."""
-    job_repo = JobRepository(db)
-    request_repo = RequestRepository(db)
-
-    # Get job
-    job = job_repo.get_active(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    # Check ownership via request
-    request = request_repo.get_active(job.request_id)
-    if not request or request.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # Only QUEUED jobs can be cancelled
-    if job.status != "QUEUED":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel job with status {job.status}. Only QUEUED jobs can be cancelled.",
-        )
-
-    # Cancel the job
-    cancelled_count = job_repo.cancel_jobs([job])
-
-    return {
-        "success": True,
-        "job_id": job_id,
-        "cancelled": cancelled_count > 0,
-        "message": "Job cancelled" if cancelled_count > 0 else "Job was not in QUEUED state",
-    }
+    result = await job_service.cancel_job(job_id, current_user.id)
+    if not result["success"]:
+        if result["message"] == "Job not found":
+            raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result

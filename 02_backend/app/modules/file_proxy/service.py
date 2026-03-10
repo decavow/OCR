@@ -40,7 +40,10 @@ class FileProxyService:
             object_key=file.object_key,
         )
 
-        logger.debug(f"Downloaded file {file_id} for job {job_id}")
+        logger.debug(
+            "Downloaded file %s for job %s", file_id, job_id,
+            extra={"job_id": job_id},
+        )
         return content, file.mime_type, file.original_name
 
     async def upload_from_worker(
@@ -82,5 +85,8 @@ class FileProxyService:
         # Update job with result path
         self.job_repo.set_result_path(job, result_key)
 
-        logger.info(f"Uploaded result for job {job_id}: {result_key}")
+        logger.info(
+            "Uploaded result for job %s: %s", job_id, result_key,
+            extra={"job_id": job_id},
+        )
         return result_key

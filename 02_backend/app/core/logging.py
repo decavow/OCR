@@ -3,7 +3,14 @@
 import logging
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
+
+# Whitelisted extra fields that will be included in JSON output
+EXTRA_FIELDS = (
+    "request_id", "user_id", "job_id", "instance_id",
+    "service_type", "action", "actor_email", "entity_type",
+    "entity_id", "method", "status_code",
+)
 
 
 class JSONFormatter(logging.Formatter):
@@ -11,7 +18,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "message": record.getMessage(),
             "logger": record.name,
@@ -21,9 +28,11 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
 
-        # Add extra fields
-        if hasattr(record, "extra"):
-            log_data.update(record.extra)
+        # Add whitelisted extra fields set on the LogRecord
+        for field in EXTRA_FIELDS:
+            value = getattr(record, field, None)
+            if value is not None:
+                log_data[field] = value
 
         return json.dumps(log_data)
 

@@ -1,5 +1,6 @@
-# Admin dashboard endpoints: stats, recent requests, users, job volume
+# Admin dashboard endpoints: stats, recent requests, users, job volume, audit log
 
+import json
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from app.infrastructure.database.repositories import (
     JobRepository,
     ServiceTypeRepository,
     ServiceInstanceRepository,
+    AuditLogRepository,
 )
 
 router = APIRouter()
@@ -89,6 +91,22 @@ class ServiceInstanceItem(BaseModel):
 
 class ServiceInstanceListResponse(BaseModel):
     items: List[ServiceInstanceItem]
+    total: int
+
+
+class AuditLogItem(BaseModel):
+    id: int
+    timestamp: str
+    actor_email: str
+    action: str
+    entity_type: str
+    entity_id: str
+    details: Optional[dict] = None
+    request_id: Optional[str] = None
+
+
+class AuditLogListResponse(BaseModel):
+    items: List[AuditLogItem]
     total: int
 
 
@@ -238,3 +256,36 @@ async def get_admin_service_instances(
     ]
 
     return ServiceInstanceListResponse(items=items, total=len(items))
+
+
+@router.get("/audit-log", response_model=AuditLogListResponse)
+async def get_audit_log(
+    entity_type: Optional[str] = Query(None),
+    entity_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
+):
+    """Query audit log entries."""
+    audit_repo = AuditLogRepository(db)
+
+    if entity_type and entity_id:
+        entries = audit_repo.query_by_entity(entity_type, entity_id, limit=limit)
+    else:
+        entries = audit_repo.query_recent(limit=limit)
+
+    items = [
+        AuditLogItem(
+            id=e.id,
+            timestamp=e.timestamp.isoformat(),
+            actor_email=e.actor_email,
+            action=e.action,
+            entity_type=e.entity_type,
+            entity_id=e.entity_id,
+            details=json.loads(e.details) if e.details else None,
+            request_id=e.request_id,
+        )
+        for e in entries
+    ]
+
+    return AuditLogListResponse(items=items, total=len(items))

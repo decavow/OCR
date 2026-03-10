@@ -12,9 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import Loading from '../components/common/Loading'
 import ErrorMessage from '../components/common/ErrorMessage'
 import BatchStatus from '../components/batch/BatchStatus'
+import { SkeletonTable } from '../components/common/Skeleton'
 
 const STATUS_OPTIONS = ['PROCESSING', 'COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'CANCELLED']
 
@@ -126,7 +126,7 @@ export default function BatchesPage() {
       </div>
 
       {loading ? (
-        <Loading text="Loading..." />
+        <SkeletonTable rows={5} cols={8} />
       ) : error ? (
         <ErrorMessage message={error} />
       ) : batches.length === 0 ? (

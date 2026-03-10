@@ -14,7 +14,14 @@ export default function JobItem({ job, fileName, onClick }: JobItemProps) {
       onClick={onClick}
     >
       <span className="text-sm text-foreground truncate">{fileName}</span>
-      <JobStatus status={job.status} />
+      <div className="flex items-center gap-2 shrink-0">
+        {job.retry_count > 0 && (
+          <span className="text-xs text-warning">
+            Retry {job.retry_count}/{job.max_retries}
+          </span>
+        )}
+        <JobStatus status={job.status} />
+      </div>
     </div>
   )
 }

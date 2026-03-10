@@ -135,3 +135,22 @@ class RequestRepository(BaseRepository[Request]):
         return self.db.query(Request).filter(
             Request.deleted_at.is_(None)
         ).order_by(Request.created_at.desc()).offset(skip).limit(limit).all()
+
+    def get_expired(self, limit: int = 100) -> List[Request]:
+        """Get expired requests (expires_at < now, not deleted)."""
+        return self.db.query(Request).filter(
+            Request.expires_at < datetime.now(timezone.utc),
+            Request.deleted_at.is_(None)
+        ).limit(limit).all()
+
+    def get_soft_deleted_before(self, cutoff: datetime, limit: int = 100) -> List[Request]:
+        """Get soft-deleted requests older than cutoff (for purge)."""
+        return self.db.query(Request).filter(
+            Request.deleted_at.isnot(None),
+            Request.deleted_at < cutoff,
+        ).limit(limit).all()
+
+    def hard_delete(self, request: Request) -> None:
+        """Permanently delete request from DB (cascade deletes files/jobs)."""
+        self.db.delete(request)
+        self.db.commit()

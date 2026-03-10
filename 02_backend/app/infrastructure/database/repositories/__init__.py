@@ -11,5 +11,8 @@ from .heartbeat import HeartbeatRepository
 from .service_type import ServiceTypeRepository
 from .service_instance import ServiceInstanceRepository
 
+# Audit log
+from .audit_log import AuditLogRepository
+
 # Legacy (kept for backwards compatibility during migration)
 from .service import ServiceRepository

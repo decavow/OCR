@@ -1,5 +1,6 @@
 # SQLite connection + WAL mode setup
 
+import logging
 from contextlib import contextmanager
 from typing import Generator
 
@@ -8,6 +9,8 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Create engine with SQLite-specific settings
 engine = create_engine(
@@ -68,6 +71,21 @@ def _run_migrations() -> None:
     migrations = [
         "ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0",
         'ALTER TABLE service_types ADD COLUMN supported_output_formats TEXT DEFAULT \'["txt","json"]\'',
+        # audit_logs table is created by create_all(), but kept here as safety net
+        """CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT (datetime('now')),
+            actor_email VARCHAR(255) NOT NULL,
+            action VARCHAR(50) NOT NULL,
+            entity_type VARCHAR(50) NOT NULL,
+            entity_id VARCHAR(150) NOT NULL,
+            details TEXT,
+            request_id VARCHAR(36)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_timestamp ON audit_logs(timestamp)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_actor_email ON audit_logs(actor_email)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_entity ON audit_logs(entity_type, entity_id)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_logs_action ON audit_logs(action)",
     ]
 
     with engine.connect() as conn:
@@ -75,8 +93,10 @@ def _run_migrations() -> None:
             try:
                 conn.execute(text(stmt))
                 conn.commit()
-            except Exception:
+                logger.info("Migration applied: %s", stmt[:80])
+            except Exception as e:
                 conn.rollback()
+                logger.debug("Migration skipped (likely already applied): %s — %s", stmt[:60], e)
 
 
 def init_db() -> None:
@@ -84,6 +104,7 @@ def init_db() -> None:
     from app.infrastructure.database.models import Base
     Base.metadata.create_all(bind=engine)
     _run_migrations()
+    logger.info("Database initialized: %s", settings.database_url)
 
 
 def drop_db() -> None:

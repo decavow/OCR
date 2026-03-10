@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
+import { ToastProvider } from './context/ToastContext'
+import ToastContainer from './components/common/Toast'
 
 // Pages
 import LoginPage from './pages/LoginPage'
@@ -23,6 +25,7 @@ import MainLayout from './components/layout/MainLayout'
 
 function App() {
   return (
+    <ToastProvider>
     <AuthProvider>
       <BrowserRouter>
         <Routes>
@@ -55,7 +58,9 @@ function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </BrowserRouter>
+      <ToastContainer />
     </AuthProvider>
+    </ToastProvider>
   )
 }
 

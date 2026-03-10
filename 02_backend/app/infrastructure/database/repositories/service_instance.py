@@ -61,10 +61,14 @@ class ServiceInstanceRepository(BaseRepository[ServiceInstance]):
         """
         existing = self.get(instance_id)
         if existing:
-            # Update last heartbeat and return
             existing.last_heartbeat_at = datetime.now(timezone.utc)
             if metadata:
                 existing.instance_metadata = json.dumps(metadata)
+            # Re-activation: if type is APPROVED, a re-registering instance should become ACTIVE
+            # (handles case where instance was marked DEAD by heartbeat monitor)
+            if service_type.status == ServiceTypeStatus.APPROVED:
+                if existing.status in (ServiceInstanceStatus.DEAD, ServiceInstanceStatus.WAITING):
+                    existing.status = ServiceInstanceStatus.ACTIVE
             return self.update(existing)
 
         # Determine initial status based on type status

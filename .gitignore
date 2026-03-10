@@ -45,6 +45,15 @@ nul
 # === Docker ===
 *.log
 
+# === Claude Code ===
+.claude/settings.local.json
+
+# === Test data (binary files: PDF, images) ===
+05_test_cases/data_test/
+
+# === Stray lock files ===
+/package-lock.json
+
 # === Project-specific ===
 collection_tool.py
 ocr.md

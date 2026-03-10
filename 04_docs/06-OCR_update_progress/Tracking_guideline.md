@@ -6,7 +6,6 @@
 
 ## 1. Nguyên Tắc
 
-- Chỉ đánh giá theo **phase hiện tại** (không đánh giá scope của phase sau).
 - Lấy scope từ file `requirements.md` — file này có thể thay đổi theo nhu cầu.
 - Code stub / TODO = **không tính** là hoàn thành.
 - Cập nhật tracking mỗi khi hoàn thành nhóm tính năng hoặc kết thúc sprint.

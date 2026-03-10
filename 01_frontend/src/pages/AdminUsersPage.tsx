@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, FileText, RefreshCw, Shield } from 'lucide-react'
+import { Users, FileText, RefreshCw } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button as ShadcnButton } from '@/components/ui/button'
 import {

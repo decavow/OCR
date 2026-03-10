@@ -1,5 +1,6 @@
 # POST /upload (multipart files + config)
 
+import logging
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
@@ -10,6 +11,7 @@ from app.api.deps import get_db, get_current_user, get_storage, get_queue
 from app.modules.upload.service import UploadService
 from app.modules.upload.exceptions import UploadError
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -92,6 +94,8 @@ async def upload_files(
         )
 
     except UploadError as e:
+        logger.warning("Upload rejected: user_id=%s method=%s tier=%d error=%s", current_user.id, method, tier, e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.error("Upload failed unexpectedly: user_id=%s method=%s tier=%d error=%s", current_user.id, method, tier, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")

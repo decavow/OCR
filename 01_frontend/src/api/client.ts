@@ -20,13 +20,24 @@ client.interceptors.request.use((config) => {
   return config
 })
 
-// Response interceptor - handle errors
+// Custom event for toast notifications from API errors
+function emitApiError(message: string) {
+  window.dispatchEvent(new CustomEvent('api-error', { detail: message }))
+}
+
+// Response interceptor - handle errors + emit toast events
 client.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem(TOKEN_KEY)
       window.location.href = '/login'
+    } else if (error.response?.status === 429) {
+      emitApiError('Too many requests, please slow down')
+    } else if (error.response?.status >= 500) {
+      emitApiError('Server error, please try again')
+    } else if (!error.response) {
+      emitApiError('Connection lost, please check your network')
     }
     return Promise.reject(error)
   }
