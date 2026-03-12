@@ -3,7 +3,12 @@
     "allow": [
       "Bash(dpkg -l:*)",
       "Bash(docker compose down -v)",
-      "Bash(find /c/Projects/OCR/02_backend/app/api/v1/endpoints -name \"*.py\" -exec grep -l \"upload\\\\|batch\\\\|submit\" {} ;)"
+      "Bash(find /c/Projects/OCR/02_backend/app/api/v1/endpoints -name \"*.py\" -exec grep -l \"upload\\\\|batch\\\\|submit\" {} ;)",
+      "Bash(where tesseract)",
+      "Read(//c/Program Files/Tesseract-OCR/**)",
+      "Bash(conda run -n ocr-worker pip install pdf2image)",
+      "Bash(conda run -n ocr-worker python -c \":*)",
+      "Bash(conda run -n ocr-worker python -c \"import sys; sys.path.insert\\(0, ''C:/Projects/OCR/03_worker''\\); from app.engines.tesseract.handler import TextRawTesseractHandler; h = TextRawTesseractHandler\\(lang=''en''\\); print\\(''Engine info:'', h.get_engine_info\\(\\)\\); print\\(''SUCCESS''\\)\")"
     ]
   }
 }

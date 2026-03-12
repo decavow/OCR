@@ -1,5 +1,11 @@
 import client from './client'
 
+export interface EngineInfo {
+  name?: string
+  version?: string
+  capabilities?: string[]
+}
+
 export interface AvailableService {
   id: string
   display_name: string
@@ -7,6 +13,7 @@ export interface AvailableService {
   allowed_methods: string[]
   allowed_tiers: number[]
   active_instances: number
+  engine_info: EngineInfo | null
 }
 
 export interface AvailableServicesResponse {

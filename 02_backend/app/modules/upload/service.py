@@ -176,6 +176,10 @@ class UploadService:
         )
         logger.debug(f"Created job record: {validated.job_id}")
 
+        # Transition: SUBMITTED → QUEUED before publishing to avoid race condition
+        # (worker can pick up the message before status update completes)
+        self.job_repo.update_status(job, status="QUEUED")
+
         # Publish to NATS
         subject = get_subject(method, tier)
         message = JobMessage(

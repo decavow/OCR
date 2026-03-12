@@ -8,8 +8,8 @@ import time
 import httpx
 
 BASE_URL = "http://localhost:8080/api/v1"
-EMAIL = "admin@gmail.com"
-PASSWORD = "admin123"
+EMAIL = "klinh2212112@gmail.com"
+PASSWORD = "klinh2212112@gmail.com"
 
 TEST_FILES = [
     ("data_test/1709.04109v4.pdf", "application/pdf"),
@@ -52,8 +52,8 @@ def main():
                     "/upload",
                     files=[("files", (file_path.split("/")[-1], f, mime_type))],
                     data={
-                        "output_format": "txt",
-                        "method": "ocr_text_raw",
+                        "output_format": "json",
+                        "method": "structured_extract",
                         "tier": "0",
                         "retention_hours": "168",
                     },

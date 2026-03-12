@@ -145,6 +145,9 @@ export default function ResultViewerPage() {
             <span>Lines: {result.lines}</span>
             <span>Time: {result.metadata.processing_time_ms}ms</span>
             <span>Method: {result.metadata.method}</span>
+            {result.metadata.engine_name && (
+              <span>Engine: {result.metadata.engine_name}</span>
+            )}
           </div>
         </div>
       </div>

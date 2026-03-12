@@ -4,6 +4,8 @@ import asyncio
 import logging
 from typing import Optional
 
+import httpx
+
 from app.config import settings
 from app.core.shutdown import GracefulShutdown
 from app.core.processor import OCRProcessor
@@ -197,6 +199,16 @@ class OCRWorker:
             # Update state
             self.state.start_job(job_id)
 
+            # Report PROCESSING to backend
+            try:
+                await self.orchestrator.update_status(job_id, "PROCESSING")
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    logger.warning(f"Job {job_id} not found in backend (stale message). Terminating.")
+                    await self.queue.term(msg_id)
+                    return
+                raise
+
             # Download file via File Proxy
             logger.debug(f"Downloading file {file_id}")
             file_content, content_type, filename = await self.file_proxy.download(
@@ -264,6 +276,7 @@ class OCRWorker:
         retriable: bool,
     ) -> None:
         """Handle job failure."""
+        job_not_found = False
         try:
             # Report failure to orchestrator
             await self.orchestrator.update_status(
@@ -272,11 +285,19 @@ class OCRWorker:
                 error=str(error),
                 retriable=retriable,
             )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                job_not_found = True
+                logger.warning(f"Job {job_id} not found in backend. Terminating message.")
+            else:
+                logger.error(f"Failed to report status: {e}")
         except Exception as e:
             logger.error(f"Failed to report status: {e}")
 
-        # Nak or term the message
-        if retriable:
+        # If backend doesn't know this job, terminate (don't retry)
+        if job_not_found:
+            await self.queue.term(msg_id)
+        elif retriable:
             await self.queue.nak(msg_id, delay=5.0)  # Retry after 5 seconds
         else:
             await self.queue.term(msg_id)  # Don't retry

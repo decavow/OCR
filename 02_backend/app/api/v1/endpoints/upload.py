@@ -1,7 +1,7 @@
 # POST /upload (multipart files + config)
 
 import logging
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from pydantic import BaseModel
@@ -50,10 +50,10 @@ class UploadResponse(BaseModel):
 @router.post("", response_model=UploadResponse)
 async def upload_files(
     files: List[UploadFile] = File(...),
-    output_format: str = "txt",
-    retention_hours: int = 168,
-    method: str = "ocr_text_raw",
-    tier: int = 0,
+    output_format: str = Form("txt"),
+    retention_hours: int = Form(168),
+    method: str = Form("ocr_text_raw"),
+    tier: int = Form(0),
     db: Session = Depends(get_db),
     storage=Depends(get_storage),
     queue=Depends(get_queue),

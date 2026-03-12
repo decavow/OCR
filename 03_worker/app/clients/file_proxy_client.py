@@ -3,6 +3,7 @@
 import base64
 import logging
 from typing import Optional, Tuple
+from urllib.parse import unquote
 
 import httpx
 
@@ -54,7 +55,7 @@ class FileProxyClient:
 
             # Extract metadata from headers
             content_type = response.headers.get("X-Content-Type", "application/octet-stream")
-            filename = response.headers.get("X-File-Name", "unknown")
+            filename = unquote(response.headers.get("X-File-Name", "unknown"))
 
             logger.debug(f"Downloaded {len(response.content)} bytes, type={content_type}")
 

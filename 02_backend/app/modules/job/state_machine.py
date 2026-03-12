@@ -4,7 +4,7 @@ from typing import Set
 
 # Valid state transitions
 VALID_TRANSITIONS: dict[str, Set[str]] = {
-    "SUBMITTED": {"VALIDATING", "REJECTED"},
+    "SUBMITTED": {"VALIDATING", "QUEUED", "REJECTED"},
     "VALIDATING": {"QUEUED", "REJECTED"},
     "QUEUED": {"PROCESSING", "CANCELLED"},
     "PROCESSING": {"COMPLETED", "PARTIAL_SUCCESS", "FAILED"},

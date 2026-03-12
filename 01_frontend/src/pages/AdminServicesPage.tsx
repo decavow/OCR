@@ -164,6 +164,7 @@ export default function AdminServicesPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Service</TableHead>
+                <TableHead>Engine</TableHead>
                 <TableHead>Methods / Tiers</TableHead>
                 <TableHead>Instances</TableHead>
                 <TableHead>Status</TableHead>
@@ -180,6 +181,22 @@ export default function AdminServicesPage() {
                     <TableCell>
                       <div className="text-sm font-medium text-foreground">{svc.display_name}</div>
                       <code className="text-xs text-muted-foreground">{svc.id}</code>
+                    </TableCell>
+                    <TableCell>
+                      {svc.engine_info ? (
+                        <div>
+                          <div className="text-sm font-medium text-foreground">
+                            {String(svc.engine_info.name ?? '-')}
+                          </div>
+                          {svc.engine_info.version != null && (
+                            <span className="text-xs text-muted-foreground">
+                              v{String(svc.engine_info.version)}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">

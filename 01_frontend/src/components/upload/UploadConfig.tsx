@@ -38,6 +38,20 @@ function formatVND(amount: number): string {
   return amount.toLocaleString('vi-VN') + ' VND'
 }
 
+function getEngineName(services: AvailableService[]): string | null {
+  for (const svc of services) {
+    if (svc.engine_info?.name) return svc.engine_info.name
+  }
+  return null
+}
+
+function getEngineVersion(services: AvailableService[]): string | null {
+  for (const svc of services) {
+    if (svc.engine_info?.version) return svc.engine_info.version
+  }
+  return null
+}
+
 function buildOptions(services: AvailableService[]) {
   const methods = new Set<string>()
   const tiers = new Set<number>()
@@ -82,6 +96,8 @@ export default function UploadConfig({ config, onChange, fileCount, onServicesLo
   const estimatedPrice = fileCount * ratePerPage
   const currentMethod = methodOpts.find((m) => m.value === config.method)
   const currentTier = tierOpts.find((t) => t.value === config.tier)
+  const engineName = getEngineName(services)
+  const engineVersion = getEngineVersion(services)
   const noServices = !loading && services.length === 0
 
   return (
@@ -204,9 +220,16 @@ export default function UploadConfig({ config, onChange, fileCount, onServicesLo
       {/* Active Model Badge */}
       <div className="flex items-center justify-between rounded-md bg-primary/10 border border-primary/20 px-4 py-3">
         <span className="text-xs text-muted-foreground">Active Model</span>
-        <span className="text-sm font-medium text-primary">
-          {currentMethod?.label ?? config.method} &middot; {currentTier?.label ?? `Tier ${config.tier}`}
-        </span>
+        <div className="flex items-center gap-2">
+          {engineName && (
+            <span className="inline-flex items-center rounded-full bg-accent text-accent-foreground px-2 py-0.5 text-xs font-medium">
+              {engineName}{engineVersion ? ` v${engineVersion}` : ''}
+            </span>
+          )}
+          <span className="text-sm font-medium text-primary">
+            {currentMethod?.label ?? config.method} &middot; {currentTier?.label ?? `Tier ${config.tier}`}
+          </span>
+        </div>
       </div>
     </div>
   )

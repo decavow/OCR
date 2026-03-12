@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.schemas.job import JobResponse, JobResultResponse, JobResultMetadata
 from app.api.deps import get_current_user, get_db, get_storage, get_job_service
-from app.infrastructure.database.repositories import JobRepository, RequestRepository, FileRepository
+from app.infrastructure.database.repositories import JobRepository, RequestRepository, FileRepository, ServiceTypeRepository
 from app.infrastructure.storage.exceptions import ObjectNotFoundError
 from app.modules.job.service import JobService
 from app.config import settings
@@ -113,6 +113,18 @@ async def get_job_result(
         except json.JSONDecodeError as e:
             logger.debug("Result is not valid JSON for job %s: %s", job_id, e)
 
+    # Resolve engine name from service type
+    engine_name = None
+    if job.worker_id:
+        service_type_repo = ServiceTypeRepository(db)
+        svc_type = service_type_repo.get(job.worker_id)
+        if svc_type and svc_type.engine_info:
+            try:
+                info = json.loads(svc_type.engine_info)
+                engine_name = info.get("name")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
     # Return structured response
     lines = text.strip().split("\n") if text.strip() else []
     return JobResultResponse(
@@ -123,6 +135,7 @@ async def get_job_result(
             tier=str(job.tier),
             processing_time_ms=job.processing_time_ms or 0,
             service_version=job.engine_version or "unknown",
+            engine_name=engine_name,
         )
     )
 

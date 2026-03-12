@@ -47,5 +47,6 @@ export interface JobResultMetadata {
   method: string
   tier: string
   processing_time_ms: number
-  version: string
+  service_version: string
+  engine_name: string | null
 }

@@ -51,6 +51,7 @@ class JobResultMetadata(BaseModel):
     tier: str
     processing_time_ms: int
     service_version: str
+    engine_name: str | None = None
 
 
 class JobResultResponse(BaseModel):

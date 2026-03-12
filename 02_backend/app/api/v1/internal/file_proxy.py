@@ -2,6 +2,7 @@
 
 import base64
 import logging
+from urllib.parse import quote
 from fastapi import APIRouter, Header, Depends, HTTPException, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -44,12 +45,14 @@ async def download_for_worker(
             extra={"request_id": rid, "job_id": data.job_id},
         )
 
+        # RFC 5987: encode non-ASCII filename for HTTP headers
+        encoded_filename = quote(filename)
         return Response(
             content=content,
             media_type=content_type,
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "X-File-Name": filename,
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                "X-File-Name": encoded_filename,
                 "X-Content-Type": content_type,
             },
         )

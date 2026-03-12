@@ -22,6 +22,7 @@ class AvailableServiceResponse(BaseModel):
     allowed_tiers: List[int]
     supported_output_formats: List[str]
     active_instances: int
+    engine_info: dict | None = None
 
 
 class AvailableServicesListResponse(BaseModel):
@@ -53,6 +54,13 @@ async def list_available_services(
         if active_count == 0:
             continue
 
+        engine_info = None
+        if st.engine_info:
+            try:
+                engine_info = json.loads(st.engine_info)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         items.append(AvailableServiceResponse(
             id=st.id,
             display_name=st.display_name,
@@ -61,6 +69,7 @@ async def list_available_services(
             allowed_tiers=json.loads(st.allowed_tiers),
             supported_output_formats=json.loads(st.supported_output_formats),
             active_instances=active_count,
+            engine_info=engine_info,
         ))
 
     return AvailableServicesListResponse(items=items, total=len(items))

@@ -2,8 +2,11 @@
 
 import asyncio
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import os
+from pathlib import Path
 import signal
+import socket
 import sys
 
 from app.config import settings
@@ -12,14 +15,33 @@ from app.core.shutdown import GracefulShutdown
 
 
 def setup_logging():
-    """Configure logging."""
+    """Configure logging with stdout + file output."""
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_dir = Path(__file__).resolve().parents[2] / "data" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Stdout handler (giữ nguyên)
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+
+    # File handler — rotation theo ngày, giữ 30 ngày, tách file per instance
+    instance_id = os.getenv("WORKER_SERVICE_ID", "") or f"{os.getenv('WORKER_SERVICE_TYPE', 'ocr-text-tier0')}-{socket.gethostname()[:12]}"
+    file_handler = TimedRotatingFileHandler(
+        filename=str(log_dir / f"worker-{instance_id}.log"),
+        when="midnight",
+        backupCount=30,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
 
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        handlers=[stdout_handler, file_handler],
     )
 
     # Reduce noise from third-party libraries

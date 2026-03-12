@@ -8,7 +8,7 @@ Dockerfile*
 
 # Deploy configs (not needed inside image, except requirements.txt for per-worker builds)
 deploy/
-!deploy/*/requirements.txt
+!deploy/*/requirements*.txt
 
 # Python
 __pycache__

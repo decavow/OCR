@@ -4,6 +4,8 @@ import logging
 import json
 import sys
 from datetime import datetime, timezone
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 
 # Whitelisted extra fields that will be included in JSON output
 EXTRA_FIELDS = (
@@ -38,13 +40,29 @@ class JSONFormatter(logging.Formatter):
 
 
 def setup_logging(level: str = "INFO") -> None:
-    """Setup structured logging."""
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter())
+    """Setup structured logging with stdout + file output."""
+    log_dir = Path(__file__).resolve().parents[3] / "data" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    formatter = JSONFormatter()
+
+    # Stdout handler (giữ nguyên)
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+
+    # File handler — rotation theo ngày, giữ 30 ngày
+    file_handler = TimedRotatingFileHandler(
+        filename=str(log_dir / "backend.log"),
+        when="midnight",
+        backupCount=30,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, level.upper()))
-    root_logger.addHandler(handler)
+    root_logger.addHandler(stdout_handler)
+    root_logger.addHandler(file_handler)
 
 
 def get_logger(name: str) -> logging.Logger:
