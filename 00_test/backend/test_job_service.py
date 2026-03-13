@@ -233,3 +233,91 @@ class TestUpdateJobStatus:
 
         result = await svc.update_job_status("job-404", "COMPLETED", "worker-1")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_failed_retriable_triggers_retry_orchestrator(self, job_service_class):
+        """JS-024: FAILED + retriable should delegate to RetryOrchestrator."""
+        svc = job_service_class(db=MagicMock())
+        job = make_job(status="PROCESSING")
+        updated_job = make_job(status="FAILED")
+        req = make_request()
+
+        svc.job_repo.get_active = MagicMock(return_value=job)
+        svc.job_repo.update_status = MagicMock(return_value=updated_job)
+        svc.request_repo.get_active = MagicMock(return_value=req)
+        svc.request_repo.increment_failed = MagicMock()
+        svc.job_repo.get_by_request = MagicMock(return_value=[make_job(status="FAILED")])
+        svc.request_repo.update_status = MagicMock()
+
+        # Patch _handle_retry to verify it gets called
+        from unittest.mock import AsyncMock as AM
+        svc._handle_retry = AM()
+
+        result = await svc.update_job_status(
+            "job-1", "FAILED", "worker-1", error="timeout", retriable=True
+        )
+        assert result is not None
+        svc._handle_retry.assert_called_once()
+
+
+class TestGetJobResult:
+    """JS-009 to JS-011: get_job_result tests."""
+
+    @pytest.mark.asyncio
+    async def test_completed_job_with_result_path(self, job_service_class):
+        """JS-009: Job COMPLETED with result_path returns (job, bytes)."""
+        svc = job_service_class(db=MagicMock())
+        job = make_job(status="COMPLETED")
+        job.result_path = "user1/req1/job1/result.txt"
+        req = make_request(user_id="user-1")
+
+        svc.job_repo.get_active = MagicMock(return_value=job)
+        svc.request_repo.get_active = MagicMock(return_value=req)
+
+        storage = MagicMock()
+        storage.download = AsyncMock(return_value=b"OCR result content")
+
+        result = await svc.get_job_result("job-1", "user-1", storage)
+        assert result is not None
+        returned_job, content = result
+        assert returned_job.status == "COMPLETED"
+        assert content == b"OCR result content"
+
+    @pytest.mark.asyncio
+    async def test_non_completed_job_returns_none(self, job_service_class):
+        """JS-010: Job not COMPLETED returns None."""
+        svc = job_service_class(db=MagicMock())
+        job = make_job(status="PROCESSING")
+        req = make_request(user_id="user-1")
+
+        svc.job_repo.get_active = MagicMock(return_value=job)
+        svc.request_repo.get_active = MagicMock(return_value=req)
+
+        storage = MagicMock()
+        result = await svc.get_job_result("job-1", "user-1", storage)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_no_result_path_returns_none(self, job_service_class):
+        """JS-011: Completed job without result_path returns None."""
+        svc = job_service_class(db=MagicMock())
+        job = make_job(status="COMPLETED")
+        job.result_path = None
+        req = make_request(user_id="user-1")
+
+        svc.job_repo.get_active = MagicMock(return_value=job)
+        svc.request_repo.get_active = MagicMock(return_value=req)
+
+        storage = MagicMock()
+        result = await svc.get_job_result("job-1", "user-1", storage)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_job_not_found_returns_none(self, job_service_class):
+        """get_job_result with nonexistent job returns None."""
+        svc = job_service_class(db=MagicMock())
+        svc.job_repo.get_active = MagicMock(return_value=None)
+
+        storage = MagicMock()
+        result = await svc.get_job_result("job-404", "user-1", storage)
+        assert result is None

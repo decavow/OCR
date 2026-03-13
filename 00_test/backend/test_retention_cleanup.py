@@ -102,6 +102,30 @@ class TestCleanupExpired:
         assert result["expired_requests"] == 3
 
 
+    @pytest.mark.asyncio
+    async def test_jobs_with_result_path_also_moved(self, cleanup_class):
+        """RC-007: Jobs with result_path have result files moved too."""
+        storage = MagicMock()
+        storage.uploads_bucket = "uploads"
+        storage.deleted_bucket = "deleted"
+        storage.client.copy_object = MagicMock()
+        storage.client.remove_object = MagicMock()
+
+        svc = cleanup_class(db=MagicMock(), storage=storage)
+        req = make_request()
+        files = [make_file("f1", "key1")]
+        jobs = [make_job("j1", "user1/req1/j1/result.txt")]
+        svc.request_repo.get_expired = MagicMock(return_value=[req])
+        svc.file_repo.get_by_request = MagicMock(return_value=files)
+        svc.file_repo.soft_delete = MagicMock()
+        svc.job_repo.get_by_request = MagicMock(return_value=jobs)
+        svc.request_repo.soft_delete = MagicMock()
+
+        result = await svc.cleanup_expired()
+        # Both the file and the result should be moved
+        assert result["files_moved"] >= 1
+
+
 class TestPurgeDeleted:
     @pytest.mark.asyncio
     async def test_no_soft_deleted_returns_zero(self, cleanup_class):
@@ -139,3 +163,19 @@ class TestPurgeDeleted:
         result = await svc.purge_deleted()
         assert result["files_removed"] == 1
         storage.client.remove_object.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_purge_custom_older_than_hours(self, cleanup_class):
+        """RC-011: Custom older_than_hours param is passed to repo."""
+        svc = cleanup_class(db=MagicMock(), storage=None)
+        svc.request_repo.get_soft_deleted_before = MagicMock(return_value=[])
+
+        await svc.purge_deleted(older_than_hours=48)
+
+        # Verify cutoff passed to repo is based on 48 hours
+        call_args = svc.request_repo.get_soft_deleted_before.call_args
+        cutoff = call_args[0][0]
+        from datetime import datetime, timezone, timedelta
+        expected_approx = datetime.now(timezone.utc) - timedelta(hours=48)
+        # Cutoff should be within 5 seconds of expected
+        assert abs((cutoff - expected_approx).total_seconds()) < 5

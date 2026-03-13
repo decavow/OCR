@@ -12,7 +12,7 @@ class TestTextRawHandler:
     @pytest.fixture
     def handler(self):
         """Create handler instance."""
-        from app.handlers.ocr_text_raw import TextRawHandler
+        from app.engines.paddle_text import TextRawHandler
 
         # Try GPU first, fallback to CPU
         try:
@@ -23,7 +23,7 @@ class TestTextRawHandler:
     @pytest.mark.asyncio
     async def test_handler_initialization(self):
         """Should initialize PaddleOCR handler."""
-        from app.handlers.ocr_text_raw import TextRawHandler
+        from app.engines.paddle_text import TextRawHandler
 
         # Try GPU
         try:

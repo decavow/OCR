@@ -62,7 +62,7 @@ class TestUpload:
         resp = await client.post(
             f"{API_V1}/upload",
             files=files,
-            params={"output_format": "json"},
+            data={"output_format": "json"},
             headers=auth_headers
         )
 
@@ -77,7 +77,7 @@ class TestUpload:
         resp = await client.post(
             f"{API_V1}/upload",
             files=files,
-            params={"method": "ocr_text_raw", "tier": 0},
+            data={"method": "ocr_text_raw", "tier": "0"},
             headers=auth_headers
         )
 

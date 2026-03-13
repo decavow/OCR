@@ -2,6 +2,7 @@
 **/.env
 **/.env.*
 **/*env*
+!**/.env.example
 
 # === Python ===
 __pycache__/
@@ -66,3 +67,5 @@ claude
 
 **_content.md
 **structure.md
+
+Model_testing/

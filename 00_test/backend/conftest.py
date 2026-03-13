@@ -46,8 +46,8 @@ async def client():
 @pytest.fixture
 async def auth_headers(client):
     """Get auth headers with valid token."""
-    import time
-    email = f"test_{int(time.time())}@example.com"
+    import uuid
+    email = f"test_{uuid.uuid4().hex[:12]}@example.com"
 
     resp = await client.post(
         f"{API_V1}/auth/register",

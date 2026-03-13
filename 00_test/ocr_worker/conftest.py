@@ -11,7 +11,7 @@ import pytest_asyncio
 import httpx
 
 # Add worker to path
-WORKER_DIR = Path(__file__).parent.parent.parent / "worker"
+WORKER_DIR = Path(__file__).parent.parent.parent / "03_worker"
 sys.path.insert(0, str(WORKER_DIR))
 
 BACKEND_URL = "http://localhost:8000"
@@ -37,8 +37,8 @@ async def client():
 @pytest_asyncio.fixture
 async def auth_headers(client):
     """Get auth headers for authenticated requests."""
-    import time
-    email = f"worker_test_{int(time.time())}@example.com"
+    import uuid
+    email = f"worker_test_{uuid.uuid4().hex[:12]}@example.com"
     resp = await client.post(
         f"{API_V1}/auth/register",
         json={"email": email, "password": "testpass123"}

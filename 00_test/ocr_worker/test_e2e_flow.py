@@ -91,7 +91,7 @@ class TestUploadToQueue:
         resp = await client.post(
             f"{API_V1}/upload",
             files=files,
-            params={"method": "ocr_text_raw", "tier": 0},
+            data={"method": "ocr_text_raw", "tier": "0"},
             headers=auth_headers
         )
         assert resp.status_code == 200
@@ -99,7 +99,7 @@ class TestUploadToQueue:
         # Create subscriber for that subject
         settings.nats_url = NATS_URL
         settings.worker_filter_subject = "ocr.ocr_text_raw.tier0"
-        settings.worker_service_id = "test-subject-check"
+        settings.worker_service_type = "test-subject-check"
 
         queue = QueueClient()
         await queue.connect()
@@ -168,7 +168,7 @@ class TestWorkerProcessing:
         resp = await client.post(
             f"{API_V1}/upload",
             files=files,
-            params={"output_format": "txt", "method": "ocr_text_raw", "tier": 0},
+            data={"output_format": "txt", "method": "ocr_text_raw", "tier": "0"},
             headers=auth_headers
         )
         assert resp.status_code == 200
@@ -176,7 +176,7 @@ class TestWorkerProcessing:
         # Step 2: Pull job from queue
         settings.nats_url = NATS_URL
         settings.worker_filter_subject = "ocr.ocr_text_raw.tier0"
-        settings.worker_service_id = "test-simulate"
+        settings.worker_service_type = "test-simulate"
         settings.file_proxy_url = "http://localhost:8000/api/v1/internal/file-proxy"
         settings.worker_access_key = "sk_local_text_tier0"
 
