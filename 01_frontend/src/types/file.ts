@@ -22,7 +22,7 @@ export interface UploadFile {
 export interface UploadConfig {
   method: string
   tier: number
-  output_format: 'txt' | 'json'
+  output_format: 'txt' | 'json' | 'md'
   retention_hours: number
 }
 

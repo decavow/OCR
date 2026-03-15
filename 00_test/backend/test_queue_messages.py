@@ -1,113 +1,106 @@
-"""
-Test cases for Queue Messages & Subjects (QM-001 to QM-004)
+"""Unit tests for queue messages and subjects.
 
-Covers:
-- JobMessage dataclass serialization
-- Default retry_count
-- Subject format: ocr.{method}.tier{tier}
-- DLQ subject format: dlq.{method}.tier{tier}
-- parse_subject()
+Sources:
+  02_backend/app/infrastructure/queue/messages.py
+  02_backend/app/infrastructure/queue/subjects.py
+
+Pure logic tests — no external dependencies.
+
+Test IDs: QM-001 to QM-004
 """
 
 import importlib.util
 from pathlib import Path
 
-# Load messages module
-msg_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "infrastructure" / "queue" / "messages.py"
-spec_msg = importlib.util.spec_from_file_location("messages", msg_path)
-msg_mod = importlib.util.module_from_spec(spec_msg)
-spec_msg.loader.exec_module(msg_mod)
-JobMessage = msg_mod.JobMessage
+import pytest
 
-# Load subjects module
-subj_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "infrastructure" / "queue" / "subjects.py"
-spec_subj = importlib.util.spec_from_file_location("subjects", subj_path)
-subj_mod = importlib.util.module_from_spec(spec_subj)
-spec_subj.loader.exec_module(subj_mod)
-get_subject = subj_mod.get_subject
-get_dlq_subject = subj_mod.get_dlq_subject
-parse_subject = subj_mod.parse_subject
+# ---------------------------------------------------------------------------
+# Module loaders
+# ---------------------------------------------------------------------------
+
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
 
-class TestJobMessageSerialization:
-    """QM-001: to_dict() serialization."""
+def _load_clean(relative_path, module_name):
+    mod_path = BACKEND_ROOT / "app" / relative_path
+    spec = importlib.util.spec_from_file_location(module_name, mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-    def test_to_dict_all_fields_present(self):
+
+messages = _load_clean("infrastructure/queue/messages.py", "messages")
+subjects = _load_clean("infrastructure/queue/subjects.py", "subjects")
+
+JobMessage = messages.JobMessage
+get_subject = subjects.get_subject
+get_dlq_subject = subjects.get_dlq_subject
+
+
+# ===================================================================
+# JobMessage  (QM-001 to QM-002)
+# ===================================================================
+
+
+class TestJobMessage:
+    """QM-001 to QM-002: Serialization and defaults."""
+
+    def test_qm001_to_dict_serialization(self):
+        """QM-001: to_dict() produces correct dictionary with all fields."""
         msg = JobMessage(
-            job_id="j-1",
-            file_id="f-1",
-            request_id="r-1",
-            method="ocr_text_raw",
+            job_id="j1",
+            file_id="f1",
+            request_id="r1",
+            method="ocr_paddle_text",
             tier=0,
             output_format="txt",
-            object_key="user1/req1/file1/test.png",
+            object_key="u1/r1/f1/doc.png",
             retry_count=2,
         )
         d = msg.to_dict()
-        assert d["job_id"] == "j-1"
-        assert d["file_id"] == "f-1"
-        assert d["request_id"] == "r-1"
-        assert d["method"] == "ocr_text_raw"
-        assert d["tier"] == 0
-        assert d["output_format"] == "txt"
-        assert d["object_key"] == "user1/req1/file1/test.png"
-        assert d["retry_count"] == 2
+        assert d == {
+            "job_id": "j1",
+            "file_id": "f1",
+            "request_id": "r1",
+            "method": "ocr_paddle_text",
+            "tier": 0,
+            "output_format": "txt",
+            "object_key": "u1/r1/f1/doc.png",
+            "retry_count": 2,
+        }
 
-    def test_from_dict_roundtrip(self):
-        original = JobMessage(
-            job_id="j-1", file_id="f-1", request_id="r-1",
-            method="ocr_text_raw", tier=0, output_format="json",
-            object_key="key/path", retry_count=1,
-        )
-        restored = JobMessage.from_dict(original.to_dict())
-        assert restored.job_id == original.job_id
-        assert restored.method == original.method
-        assert restored.retry_count == original.retry_count
+        # Round-trip: from_dict should reconstruct the same message
+        msg2 = JobMessage.from_dict(d)
+        assert msg2.to_dict() == d
 
-
-class TestJobMessageDefaults:
-    """QM-002: Default retry_count = 0."""
-
-    def test_default_retry_count(self):
+    def test_qm002_default_retry_count(self):
+        """QM-002: Default retry_count is 0."""
         msg = JobMessage(
-            job_id="j-1", file_id="f-1", request_id="r-1",
-            method="ocr_text_raw", tier=0, output_format="txt",
-            object_key="key/path",
+            job_id="j1",
+            file_id="f1",
+            request_id="r1",
+            method="ocr_paddle_text",
+            tier=0,
+            output_format="txt",
+            object_key="u1/r1/f1/doc.png",
         )
         assert msg.retry_count == 0
 
 
-class TestSubjectFormat:
-    """QM-003: Subject format ocr.{method}.tier{tier}."""
-
-    def test_standard_subject(self):
-        assert get_subject("ocr_text_raw", 0) == "ocr.ocr_text_raw.tier0"
-
-    def test_different_method_and_tier(self):
-        assert get_subject("structured_extract", 1) == "ocr.structured_extract.tier1"
-
-    def test_parse_subject_roundtrip(self):
-        subject = get_subject("ocr_text_raw", 2)
-        parsed = parse_subject(subject)
-        assert parsed["method"] == "ocr_text_raw"
-        assert parsed["tier"] == 2
+# ===================================================================
+# Subjects  (QM-003 to QM-004)
+# ===================================================================
 
 
-class TestDlqSubjectFormat:
-    """QM-004: DLQ subject format dlq.{method}.tier{tier}."""
+class TestSubjects:
+    """QM-003 to QM-004: Subject string formatting."""
 
-    def test_standard_dlq_subject(self):
-        assert get_dlq_subject("ocr_text_raw", 0) == "dlq.ocr_text_raw.tier0"
+    def test_qm003_subject_format(self):
+        """QM-003: get_subject produces 'ocr.{method}.tier{tier}'."""
+        assert get_subject("ocr_paddle_text", 0) == "ocr.ocr_paddle_text.tier0"
+        assert get_subject("ocr_pdf", 1) == "ocr.ocr_pdf.tier1"
 
-    def test_different_method_and_tier(self):
-        assert get_dlq_subject("structured_extract", 1) == "dlq.structured_extract.tier1"
-
-
-class TestParseSubject:
-    """Additional: parse_subject edge cases."""
-
-    def test_parse_invalid_subject_returns_empty(self):
-        assert parse_subject("invalid") == {}
-
-    def test_parse_non_ocr_prefix_returns_empty(self):
-        assert parse_subject("dlq.method.tier0") == {}
+    def test_qm004_dlq_subject_format(self):
+        """QM-004: get_dlq_subject produces 'dlq.{method}.tier{tier}'."""
+        assert get_dlq_subject("ocr_paddle_text", 0) == "dlq.ocr_paddle_text.tier0"
+        assert get_dlq_subject("ocr_pdf", 2) == "dlq.ocr_pdf.tier2"

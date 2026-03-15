@@ -1,81 +1,167 @@
-"""
-Pytest configuration and fixtures for backend tests.
+"""Backend unit test fixtures.
+
+Provides shared fixtures for all backend unit tests:
+- Module loading via importlib (avoids triggering full app import chain)
+- Mock factories for common objects (jobs, requests, files)
+- Async event loop
+- Sample file bytes
 """
 
-import os
-import sys
 import asyncio
+import importlib.util
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
-import httpx
 
-# Add backend to path
-backend_path = Path(__file__).parent.parent.parent / "backend"
-sys.path.insert(0, str(backend_path))
 
-# Override settings for testing
-os.environ["DATABASE_URL"] = "sqlite:///./test_data/test.db"
-os.environ["MINIO_ENDPOINT"] = "localhost:9000"
-os.environ["MINIO_ACCESS_KEY"] = "minioadmin"
-os.environ["MINIO_SECRET_KEY"] = "minioadmin"
-os.environ["NATS_URL"] = "nats://localhost:4222"
-os.environ["SECRET_KEY"] = "test-secret-key"
-os.environ["SEED_SERVICES"] = "test-worker:sk_test_key:ocr_text_raw:0"
+# ---------------------------------------------------------------------------
+# Module loader — import backend modules without triggering app startup
+# ---------------------------------------------------------------------------
 
-# Test constants
-BASE_URL = "http://localhost:8000"
-API_V1 = f"{BASE_URL}/api/v1"
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
+
+def load_module(relative_path: str, module_name: str):
+    """Load a module from 02_backend/app/ without importing the full app."""
+    mod_path = BACKEND_ROOT / "app" / relative_path
+    spec = importlib.util.spec_from_file_location(module_name, mod_path)
+    mod = importlib.util.module_from_spec(spec)
+
+    mocked = {
+        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=MagicMock())),
+        "app.config": MagicMock(settings=MagicMock()),
+        "app.infrastructure.database.models": MagicMock(),
+        "app.infrastructure.database.repositories": MagicMock(),
+    }
+    with patch.dict("sys.modules", mocked):
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def load_module_clean(relative_path: str, module_name: str):
+    """Load a module that has no app-level dependencies."""
+    mod_path = BACKEND_ROOT / "app" / relative_path
+    spec = importlib.util.spec_from_file_location(module_name, mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ---------------------------------------------------------------------------
+# Async event loop
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    loop = asyncio.new_event_loop()
     yield loop
     loop.close()
 
 
-@pytest.fixture(scope="session")
-async def client():
-    """HTTP client for API tests."""
-    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as client:
-        yield client
+# ---------------------------------------------------------------------------
+# Mock factories
+# ---------------------------------------------------------------------------
 
-
-@pytest.fixture
-async def auth_headers(client):
-    """Get auth headers with valid token."""
-    import uuid
-    email = f"test_{uuid.uuid4().hex[:12]}@example.com"
-
-    resp = await client.post(
-        f"{API_V1}/auth/register",
-        json={"email": email, "password": "testpass123"}
+def make_job(
+    job_id="job-1",
+    status="PROCESSING",
+    retry_count=0,
+    error_history="[]",
+    method="ocr_paddle_text",
+    tier=0,
+    request_id="req-1",
+    file_id="file-1",
+    result_path=None,
+    worker_id=None,
+    user_id="user-1",
+):
+    return SimpleNamespace(
+        id=job_id,
+        status=status,
+        retry_count=retry_count,
+        error_history=error_history,
+        method=method,
+        tier=tier,
+        request_id=request_id,
+        file_id=file_id,
+        result_path=result_path,
+        worker_id=worker_id,
+        request=SimpleNamespace(
+            id=request_id,
+            user_id=user_id,
+            output_format="txt",
+        ),
     )
-    assert resp.status_code == 200
-    token = resp.json()["token"]
 
-    return {"Authorization": f"Bearer {token}"}
 
+def make_request(
+    request_id="req-1",
+    user_id="user-1",
+    status="PROCESSING",
+    file_count=1,
+    method="ocr_paddle_text",
+    tier=0,
+    output_format="txt",
+    created_at=None,
+):
+    from datetime import datetime, timezone
+    return SimpleNamespace(
+        id=request_id,
+        user_id=user_id,
+        status=status,
+        file_count=file_count,
+        method=method,
+        tier=tier,
+        output_format=output_format,
+        created_at=created_at or datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+    )
+
+
+def make_file(
+    file_id="file-1",
+    request_id="req-1",
+    original_name="test.png",
+    mime_type="image/png",
+    size_bytes=1024,
+    object_key="user-1/req-1/file-1/test.png",
+):
+    return SimpleNamespace(
+        id=file_id,
+        request_id=request_id,
+        original_name=original_name,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        object_key=object_key,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sample file fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def sample_png():
-    """Minimal valid PNG file."""
-    return bytes([
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  # PNG signature
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,  # IHDR chunk
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,  # 1x1
-        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,  # IDAT chunk
-        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F,
-        0x00, 0x05, 0xFE, 0x02, 0xFE, 0xDC, 0xCC, 0x59,
-        0xE7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,  # IEND chunk
-        0x44, 0xAE, 0x42, 0x60, 0x82,
-    ])
+    """Minimal valid PNG (1x1 transparent pixel)."""
+    return (
+        b"\x89PNG\r\n\x1a\n"  # PNG signature
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+        b"\r\n\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
 
 
 @pytest.fixture
 def sample_pdf():
-    """Minimal valid PDF file."""
-    return b"%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000052 00000 n \n0000000101 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF"
+    """Minimal valid PDF bytes."""
+    return (
+        b"%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj "
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj "
+        b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\n"
+        b"xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n"
+        b"0000000052 00000 n \n0000000101 00000 n \n"
+        b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF"
+    )

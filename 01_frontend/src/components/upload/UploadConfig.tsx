@@ -164,7 +164,7 @@ export default function UploadConfig({ config, onChange, fileCount, onServicesLo
                 id="output-format"
                 className={selectClass}
                 value={config.output_format}
-                onChange={(e) => onChange({ ...config, output_format: e.target.value as 'txt' | 'json' })}
+                onChange={(e) => onChange({ ...config, output_format: e.target.value as 'txt' | 'json' | 'md' })}
               >
                 {OUTPUT_FORMATS.map((format) => (
                   <option key={format} value={format}>{format.toUpperCase()}</option>

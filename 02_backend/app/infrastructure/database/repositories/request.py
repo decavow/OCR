@@ -83,7 +83,7 @@ class RequestRepository(BaseRepository[Request]):
         self,
         user_id: str,
         file_count: int,
-        method: str = "ocr_text_raw",
+        method: str = "ocr_paddle_text",
         tier: int = 0,
         output_format: str = "txt",
         retention_hours: int = 168,

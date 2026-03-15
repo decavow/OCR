@@ -10,8 +10,17 @@ import socket
 import sys
 
 from app.config import settings
+from app.core.context import job_id_ctx
 from app.core.worker import OCRWorker
 from app.core.shutdown import GracefulShutdown
+
+
+class ContextFilter(logging.Filter):
+    """Filter to inject job_id from contextvar into log records."""
+    def filter(self, record):
+        job_id = job_id_ctx.get()
+        record.job_id = f" [job:{job_id}]" if job_id else ""
+        return True
 
 
 def setup_logging():
@@ -20,8 +29,9 @@ def setup_logging():
     log_dir = Path(__file__).resolve().parents[2] / "data" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Standard formatter, optionally inject job_id if present
     formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        "%(asctime)s [%(levelname)s]%(job_id)s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
@@ -38,6 +48,10 @@ def setup_logging():
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
+
+    ctx_filter = ContextFilter()
+    stdout_handler.addFilter(ctx_filter)
+    file_handler.addFilter(ctx_filter)
 
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),

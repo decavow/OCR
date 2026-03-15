@@ -3,9 +3,14 @@
 import logging
 import json
 import sys
+import contextvars
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+
+# Context variables for global tracing
+request_id_ctx = contextvars.ContextVar("request_id", default=None)
+job_id_ctx = contextvars.ContextVar("job_id", default=None)
 
 # Whitelisted extra fields that will be included in JSON output
 EXTRA_FIELDS = (
@@ -30,7 +35,16 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
 
-        # Add whitelisted extra fields set on the LogRecord
+        # Retrieve global contextvars first
+        req_id = request_id_ctx.get()
+        if req_id:
+            log_data["request_id"] = req_id
+            
+        jb_id = job_id_ctx.get()
+        if jb_id:
+            log_data["job_id"] = jb_id
+
+        # Add whitelisted extra fields set on the LogRecord (can override contextvars)
         for field in EXTRA_FIELDS:
             value = getattr(record, field, None)
             if value is not None:

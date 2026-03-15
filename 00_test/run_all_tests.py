@@ -1,91 +1,56 @@
-"""
-Run all tests for OCR Platform.
-
-Prerequisites:
-  1. Docker services: docker-compose -f docker-compose.infra.yml up -d
-  2. Backend running: cd backend && uvicorn app.main:app --port 8000
-  3. For worker tests: PaddleOCR installed
-
-Usage:
-  python run_all_tests.py           # Run all tests
-  python run_all_tests.py infra     # Infrastructure tests only
-  python run_all_tests.py backend   # Backend API tests only
-  python run_all_tests.py worker    # OCR Worker tests only
-"""
+#!/usr/bin/env python3
+"""Run all unit tests for backend and worker."""
 
 import subprocess
 import sys
-from pathlib import Path
-
-SCRIPT_DIR = Path(__file__).parent
-
-
-def run_infra_tests():
-    """Run infrastructure tests."""
-    print("\n" + "=" * 70)
-    print("INFRASTRUCTURE TESTS")
-    print("=" * 70)
-
-    script = SCRIPT_DIR / "infras" / "run_all.py"
-    result = subprocess.run([sys.executable, str(script)], cwd=str(SCRIPT_DIR / "infras"))
-    return result.returncode == 0
-
-
-def run_backend_tests():
-    """Run backend API tests."""
-    print("\n" + "=" * 70)
-    print("BACKEND API TESTS")
-    print("=" * 70)
-
-    script = SCRIPT_DIR / "backend" / "run_tests.py"
-    result = subprocess.run([sys.executable, str(script)], cwd=str(SCRIPT_DIR / "backend"))
-    return result.returncode == 0
-
-
-def run_worker_tests():
-    """Run OCR worker tests."""
-    print("\n" + "=" * 70)
-    print("OCR WORKER TESTS")
-    print("=" * 70)
-
-    script = SCRIPT_DIR / "ocr_worker" / "run_tests.py"
-    result = subprocess.run([sys.executable, str(script)], cwd=str(SCRIPT_DIR / "ocr_worker"))
-    return result.returncode == 0
 
 
 def main():
-    test_filter = sys.argv[1] if len(sys.argv) > 1 else "all"
+    args = sys.argv[1:] or ["-v", "--tb=short"]
 
-    results = []
+    print("=" * 60)
+    print("Running Backend Unit Tests")
+    print("=" * 60)
+    backend_result = subprocess.run(
+        [sys.executable, "-m", "pytest", "backend/"] + args,
+        cwd=str(__import__("pathlib").Path(__file__).parent),
+    )
 
-    if test_filter in ["all", "infra", "infrastructure"]:
-        results.append(("Infrastructure", run_infra_tests()))
+    print("\n" + "=" * 60)
+    print("Running Worker Unit Tests")
+    print("=" * 60)
+    worker_result = subprocess.run(
+        [sys.executable, "-m", "pytest", "ocr_worker/"] + args,
+        cwd=str(__import__("pathlib").Path(__file__).parent),
+    )
 
-    if test_filter in ["all", "backend", "api"]:
-        results.append(("Backend API", run_backend_tests()))
+    print("\n" + "=" * 60)
+    print("Running Contract & Flow Tests")
+    print("=" * 60)
+    contract_result = subprocess.run(
+        [sys.executable, "-m", "pytest", "contract/"] + args,
+        cwd=str(__import__("pathlib").Path(__file__).parent),
+    )
 
-    if test_filter in ["all", "worker", "ocr"]:
-        results.append(("OCR Worker", run_worker_tests()))
+    print("\n" + "=" * 60)
+    print("Running Integration Tests")
+    print("=" * 60)
+    integration_result = subprocess.run(
+        [sys.executable, "-m", "pytest", "integration/"] + args,
+        cwd=str(__import__("pathlib").Path(__file__).parent),
+    )
 
-    # Final summary
-    print("\n" + "=" * 70)
-    print("FINAL SUMMARY - ALL TESTS")
-    print("=" * 70)
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    print(f"Backend:     {'PASS' if backend_result.returncode == 0 else 'FAIL'}")
+    print(f"Worker:      {'PASS' if worker_result.returncode == 0 else 'FAIL'}")
+    print(f"Contract:    {'PASS' if contract_result.returncode == 0 else 'FAIL'}")
+    print(f"Integration: {'PASS' if integration_result.returncode == 0 else 'FAIL'}")
 
-    all_passed = True
-    for name, passed in results:
-        status = "[PASS]" if passed else "[FAIL]"
-        print(f"  {status} {name}")
-        if not passed:
-            all_passed = False
-
-    if all_passed:
-        print("\n>>> ALL TESTS PASSED!")
-        return 0
-    else:
-        print("\n>>> SOME TESTS FAILED!")
-        return 1
+    sys.exit(max(backend_result.returncode, worker_result.returncode,
+                 contract_result.returncode, integration_result.returncode))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

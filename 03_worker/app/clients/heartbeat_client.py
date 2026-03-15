@@ -86,6 +86,16 @@ class HeartbeatClient:
                 json=payload,
                 headers=headers,
             )
+
+            # 404 = instance not found → need to re-register
+            if response.status_code == 404:
+                logger.warning(
+                    "Instance not found on backend (404). Triggering re-registration."
+                )
+                if self._action_callback:
+                    await self._action_callback({"action": "re_register"})
+                return
+
             response.raise_for_status()
 
             # Parse response and handle action

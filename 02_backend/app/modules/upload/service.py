@@ -55,7 +55,7 @@ class UploadService:
         files: List[UploadFile],
         output_format: str = "txt",
         retention_hours: int = 168,
-        method: str = "ocr_text_raw",
+        method: str = "ocr_paddle_text",
         tier: int = 0,
     ) -> Request:
         """Process file upload: validate, store, create request and jobs."""
@@ -143,7 +143,8 @@ class UploadService:
     ) -> Tuple[File, Job]:
         """Store validated file in MinIO and create DB records."""
         object_key = generate_object_key(
-            user_id, request.id, validated.file_id, validated.filename
+            user_id, request.id, validated.file_id, validated.filename,
+            method=method, created_at=request.created_at,
         )
 
         # Store in MinIO

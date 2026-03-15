@@ -1,113 +1,99 @@
-"""
-Test cases for Health and Infrastructure endpoints.
+"""Unit tests for HealthService edge cases (02_backend/app/modules/health/service.py).
 
-Endpoints:
-  - GET /health
-  - GET /api/v1/health
+Complementary to test_health_service.py — tests specific infrastructure
+failure combinations and edge-case scenarios.
+
+Test IDs: HE-001 to HE-003
 """
+
+import importlib.util
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-import httpx
 
-BASE_URL = "http://localhost:8000"
-API_V1 = f"{BASE_URL}/api/v1"
+# ---------------------------------------------------------------------------
+# Module loader
+# ---------------------------------------------------------------------------
 
-
-class TestHealth:
-    """Tests for health check endpoints."""
-
-    @pytest.mark.asyncio
-    async def test_root_health(self, client):
-        """Should return healthy status from root endpoint."""
-        resp = await client.get("/health")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "healthy"
-
-    @pytest.mark.asyncio
-    async def test_api_health(self, client):
-        """Should return detailed health from API endpoint."""
-        resp = await client.get(f"{API_V1}/health")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "status" in data
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
 
-class TestNATSIntegration:
-    """Tests for NATS message queue integration."""
+def _load_health_service():
+    mod_path = BACKEND_ROOT / "app" / "modules" / "health" / "service.py"
+    spec = importlib.util.spec_from_file_location("health_service_he", mod_path)
+    mod = importlib.util.module_from_spec(spec)
 
-    @pytest.mark.asyncio
-    async def test_upload_publishes_to_nats(self, client, auth_headers, sample_png):
-        """Should publish job message to NATS after upload."""
-        import nats
+    sa_mock = MagicMock()
+    sa_mock.text = lambda s: s
 
-        # Connect to NATS to monitor messages
-        nc = await nats.connect("nats://localhost:4222")
-        js = nc.jetstream()
+    mocked = {
+        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=MagicMock())),
+        "sqlalchemy": sa_mock,
+        "sqlalchemy.orm": MagicMock(),
+    }
+    with patch.dict("sys.modules", mocked):
+        spec.loader.exec_module(mod)
+    return mod
 
-        # Get initial message count
-        try:
-            info = await js.stream_info("OCR_JOBS")
-            initial_count = info.state.messages
-        except Exception:
-            initial_count = 0
 
-        # Upload file
-        files = {"files": ("test.png", sample_png, "image/png")}
-        resp = await client.post(
-            f"{API_V1}/upload",
-            files=files,
-            headers=auth_headers
-        )
+hs_mod = _load_health_service()
+HealthService = hs_mod.HealthService
 
-        assert resp.status_code == 200
 
-        # Check message count increased
-        info = await js.stream_info("OCR_JOBS")
-        assert info.state.messages > initial_count
+# ===================================================================
+# check_all edge cases  (HE-001 to HE-003)
+# ===================================================================
 
-        await nc.close()
+class TestHealthEdgeCases:
+    """HE-001 to HE-003: HealthService edge-case scenarios."""
 
     @pytest.mark.asyncio
-    async def test_job_message_format(self, client, auth_headers, sample_png):
-        """Should publish correctly formatted job message."""
-        import nats
-        import json
+    async def test_he001_db_only_healthy_others_none(self):
+        """HE-001: DB healthy, storage=None, queue=None -> degraded."""
+        db = MagicMock()
+        svc = HealthService(db, storage=None, queue=None)
 
-        nc = await nats.connect("nats://localhost:4222")
-        js = nc.jetstream()
+        result = await svc.check_all()
 
-        # Create a consumer to read messages
-        sub = await js.pull_subscribe("ocr.>", durable="test-consumer")
+        assert result["status"] == "degraded"
+        assert result["checks"]["database"]["status"] == "healthy"
+        assert result["checks"]["nats"]["status"] == "unhealthy"
+        assert result["checks"]["minio"]["status"] == "unhealthy"
 
-        # Upload file
-        files = {"files": ("test.png", sample_png, "image/png")}
-        resp = await client.post(
-            f"{API_V1}/upload",
-            files=files,
-            params={"method": "ocr_text_raw", "tier": 0},
-            headers=auth_headers
-        )
+    @pytest.mark.asyncio
+    async def test_he002_nats_connected_but_minio_exception(self):
+        """HE-002: DB healthy, NATS connected, MinIO throws -> degraded."""
+        db = MagicMock()
+        storage = MagicMock()
+        storage.client.list_buckets.side_effect = ConnectionError("MinIO timeout")
+        queue = MagicMock()
+        queue.is_connected = True
 
-        assert resp.status_code == 200
-        upload_data = resp.json()
+        svc = HealthService(db, storage=storage, queue=queue)
+        result = await svc.check_all()
 
-        # Fetch and verify message
-        try:
-            msgs = await sub.fetch(batch=1, timeout=5)
-            msg_data = json.loads(msgs[0].data.decode())
+        assert result["status"] == "degraded"
+        assert result["checks"]["database"]["status"] == "healthy"
+        assert result["checks"]["nats"]["status"] == "healthy"
+        assert result["checks"]["minio"]["status"] == "unhealthy"
+        assert "MinIO timeout" in result["checks"]["minio"]["error"]
 
-            assert "job_id" in msg_data
-            assert "file_id" in msg_data
-            assert "request_id" in msg_data
-            assert msg_data["method"] == "ocr_text_raw"
-            assert msg_data["tier"] == 0
-            assert "object_key" in msg_data
+    @pytest.mark.asyncio
+    async def test_he003_db_exception_nats_disconnected_minio_ok(self):
+        """HE-003: DB throws, NATS disconnected, MinIO ok -> degraded (not unhealthy,
+        because MinIO is still healthy)."""
+        db = MagicMock()
+        db.execute.side_effect = Exception("DB locked")
+        storage = MagicMock()
+        storage.client.list_buckets.return_value = ["uploads"]
+        queue = MagicMock()
+        queue.is_connected = False
 
-            await msgs[0].ack()
-        except nats.errors.TimeoutError:
-            pytest.fail("No message received from NATS")
+        svc = HealthService(db, storage=storage, queue=queue)
+        result = await svc.check_all()
 
-        await nc.close()
+        assert result["status"] == "degraded"
+        assert result["checks"]["database"]["status"] == "unhealthy"
+        assert result["checks"]["nats"]["status"] == "unhealthy"
+        assert result["checks"]["minio"]["status"] == "healthy"

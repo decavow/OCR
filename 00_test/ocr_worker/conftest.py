@@ -1,89 +1,149 @@
-"""
-Pytest fixtures for OCR Worker tests.
+"""Worker unit test fixtures.
+
+Provides shared fixtures for all worker unit tests:
+- sys.path setup for importing worker modules
+- Mock factories for clients (queue, file_proxy, orchestrator, heartbeat)
+- Sample data fixtures
 """
 
-import sys
 import asyncio
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
-import pytest_asyncio
-import httpx
 
-# Add worker to path
-WORKER_DIR = Path(__file__).parent.parent.parent / "03_worker"
-sys.path.insert(0, str(WORKER_DIR))
+# Add worker source to sys.path
+WORKER_ROOT = Path(__file__).parent.parent.parent / "03_worker"
+if str(WORKER_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKER_ROOT))
 
-BACKEND_URL = "http://localhost:8000"
-API_V1 = f"{BACKEND_URL}/api/v1"
-NATS_URL = "nats://localhost:4222"
 
+# ---------------------------------------------------------------------------
+# Async event loop
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    loop = asyncio.new_event_loop()
     yield loop
     loop.close()
 
 
-@pytest_asyncio.fixture
-async def client():
-    """Create async HTTP client."""
-    async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=30.0) as client:
-        yield client
+# ---------------------------------------------------------------------------
+# Mock factories
+# ---------------------------------------------------------------------------
+
+def make_queue_mock():
+    q = MagicMock()
+    q.connect = AsyncMock()
+    q.disconnect = AsyncMock()
+    q.pull_job = AsyncMock(return_value=None)
+    q.ack = AsyncMock()
+    q.nak = AsyncMock()
+    q.term = AsyncMock()
+    return q
 
 
-@pytest_asyncio.fixture
-async def auth_headers(client):
-    """Get auth headers for authenticated requests."""
-    import uuid
-    email = f"worker_test_{uuid.uuid4().hex[:12]}@example.com"
-    resp = await client.post(
-        f"{API_V1}/auth/register",
-        json={"email": email, "password": "testpass123"}
-    )
-    token = resp.json()["token"]
-    return {"Authorization": f"Bearer {token}"}
+def make_file_proxy_mock():
+    proxy = MagicMock()
+    proxy.download = AsyncMock(return_value=(b"fake image content", "image/png", "test.png"))
+    proxy.upload = AsyncMock(return_value="result/key/path")
+    proxy.set_access_key = MagicMock()
+    proxy.has_access_key = True
+    return proxy
+
+
+def make_orchestrator_mock():
+    orch = MagicMock()
+    orch.register = AsyncMock(return_value={
+        "type_status": "APPROVED",
+        "instance_status": "ACTIVE",
+        "access_key": "sk_test_key",
+    })
+    orch.deregister = AsyncMock()
+    orch.update_status = AsyncMock()
+    orch.set_access_key = MagicMock()
+    orch.has_access_key = True
+    return orch
+
+
+def make_heartbeat_mock():
+    hb = MagicMock()
+    hb.start = AsyncMock()
+    hb.stop = AsyncMock()
+    hb.set_state = MagicMock()
+    hb.set_action_callback = MagicMock()
+    hb.set_access_key = MagicMock()
+    return hb
+
+
+def make_job_dict(job_id="job-1", file_id="file-1", method="ocr_paddle_text"):
+    return {
+        "job_id": job_id,
+        "file_id": file_id,
+        "request_id": "req-1",
+        "method": method,
+        "tier": 0,
+        "output_format": "txt",
+        "object_key": "user1/req1/file1/test.png",
+        "_msg_id": "msg-1",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def shutdown_handler():
+    """GracefulShutdown mock."""
+    handler = MagicMock()
+    handler.is_shutting_down = False
+    return handler
+
+
+@pytest.fixture
+def job_dict():
+    """Standard job message dict."""
+    return make_job_dict()
 
 
 @pytest.fixture
 def sample_png():
-    """Create minimal valid PNG file."""
-    return bytes([
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
-        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F,
-        0x00, 0x05, 0xFE, 0x02, 0xFE, 0xDC, 0xCC, 0x59,
-        0xE7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-        0x44, 0xAE, 0x42, 0x60, 0x82,
-    ])
+    """Minimal valid PNG (1x1 transparent pixel)."""
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+        b"\r\n\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
 
 
 @pytest.fixture
-def test_image_with_text():
-    """Create a test image with readable text."""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        import io
+def sample_pdf():
+    """Minimal valid PDF bytes."""
+    return (
+        b"%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj "
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj "
+        b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\n"
+        b"xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n"
+        b"0000000052 00000 n \n0000000101 00000 n \n"
+        b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF"
+    )
 
-        img = Image.new('RGB', (400, 100), color='white')
-        draw = ImageDraw.Draw(img)
 
-        text = "Hello OCR 123"
-        try:
-            font = ImageFont.truetype("arial.ttf", 32)
-        except:
-            font = ImageFont.load_default()
+@pytest.fixture
+def rgb_image_array():
+    """Simple 100x100 RGB numpy array."""
+    import numpy as np
+    return np.zeros((100, 100, 3), dtype=np.uint8)
 
-        draw.text((20, 30), text, fill='black', font=font)
 
-        buffer = io.BytesIO()
-        img.save(buffer, format='PNG')
-        return buffer.getvalue(), text
-
-    except ImportError:
-        pytest.skip("PIL not installed")
+@pytest.fixture
+def grayscale_image_array():
+    """Simple 100x100 grayscale numpy array."""
+    import numpy as np
+    return np.zeros((100, 100), dtype=np.uint8)

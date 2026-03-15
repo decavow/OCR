@@ -2,12 +2,13 @@
 
 import time
 import uuid
+import contextvars
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.exceptions import AppException, NotFoundError, UnauthorizedError, ForbiddenError
-from app.core.logging import get_logger
+from app.core.logging import get_logger, request_id_ctx
 
 logger = get_logger(__name__)
 
@@ -26,10 +27,17 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         # Generate or reuse correlation ID
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
+        
+        # Set contextvar for structured logger
+        token = request_id_ctx.set(request_id)
 
         start_time = time.time()
 
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        finally:
+            # Reset contextvar
+            request_id_ctx.reset(token)
 
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
@@ -46,9 +54,11 @@ async def app_exception_handler(request: Request, exc: AppException):
     request_id = getattr(request.state, "request_id", None)
     status_code = _EXCEPTION_STATUS_MAP.get(type(exc), 400)
 
+    # Use contextvar directly if inside scope, but set token manually if need be, 
+    # though logger will read from context itself. We just pass extra stat code.
     logger.warning(
         f"AppException: {exc.code} - {exc.message}",
-        extra={"request_id": request_id, "status_code": status_code},
+        extra={"status_code": status_code},
     )
 
     return JSONResponse(
@@ -64,7 +74,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.error(
         f"Unhandled exception: {exc}",
         exc_info=True,
-        extra={"request_id": request_id},
     )
 
     return JSONResponse(

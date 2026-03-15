@@ -1,81 +1,103 @@
-"""
-Test cases for Storage Helpers (SH-001 to SH-003)
+"""Unit tests for storage helpers (02_backend/app/infrastructure/storage/utils.py).
 
-Covers:
-- generate_object_key() format
-- generate_result_key() format
-- parse_object_key() roundtrip
+Pure logic tests — no external dependencies.
+
+Test IDs: SH-001 to SH-003
 """
 
 import importlib.util
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Load storage utils module
-utils_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "infrastructure" / "storage" / "utils.py"
-spec = importlib.util.spec_from_file_location("storage_utils", utils_path)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+import pytest
 
-generate_object_key = mod.generate_object_key
-generate_result_key = mod.generate_result_key
-parse_object_key = mod.parse_object_key
+# ---------------------------------------------------------------------------
+# Module loader
+# ---------------------------------------------------------------------------
+
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
 
-class TestGenerateObjectKey:
-    """SH-001: Standard path format {user_id}/{request_id}/{file_id}/{filename}."""
-
-    def test_standard_path(self):
-        key = generate_object_key("user-1", "req-1", "file-1", "document.png")
-        assert key == "user-1/req-1/file-1/document.png"
-
-    def test_with_special_characters_in_filename(self):
-        key = generate_object_key("u1", "r1", "f1", "my file (1).pdf")
-        assert key == "u1/r1/f1/my file (1).pdf"
-
-    def test_parse_roundtrip(self):
-        key = generate_object_key("user-abc", "req-xyz", "file-123", "test.png")
-        parsed = parse_object_key(key)
-        assert parsed["user_id"] == "user-abc"
-        assert parsed["request_id"] == "req-xyz"
-        assert parsed["file_id"] == "file-123"
-        assert parsed["filename"] == "test.png"
+def _load():
+    mod_path = BACKEND_ROOT / "app" / "infrastructure" / "storage" / "utils.py"
+    spec = importlib.util.spec_from_file_location("storage_utils", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-class TestGenerateResultKey:
-    """SH-002: Result path format {user_id}/{request_id}/{file_id}/result.{format}."""
-
-    def test_standard_result_path(self):
-        key = generate_result_key("user-1", "req-1", "file-1", "txt")
-        assert key == "user-1/req-1/file-1/result.txt"
-
-    def test_json_format(self):
-        key = generate_result_key("u1", "r1", "f1", "json")
-        assert key == "u1/r1/f1/result.json"
-
-    def test_result_key_is_parseable(self):
-        key = generate_result_key("user-1", "req-1", "file-1", "txt")
-        parsed = parse_object_key(key)
-        assert parsed["user_id"] == "user-1"
-        assert parsed["request_id"] == "req-1"
-        assert parsed["file_id"] == "file-1"
-        assert parsed["filename"] == "result.txt"
+utils = _load()
+generate_object_key = utils.generate_object_key
+generate_result_key = utils.generate_result_key
+parse_object_key = utils.parse_object_key
 
 
-class TestParseObjectKey:
-    """SH-003: parse_object_key returns correct components."""
+# ===================================================================
+# Storage helpers  (SH-001 to SH-003)
+# ===================================================================
 
-    def test_valid_key(self):
-        parsed = parse_object_key("user1/req1/file1/doc.png")
-        assert parsed == {
-            "user_id": "user1",
-            "request_id": "req1",
-            "file_id": "file1",
-            "filename": "doc.png",
+
+class TestStorageHelpers:
+    """SH-001 to SH-003: Object key generation and parsing."""
+
+    def test_sh001_generate_object_key(self):
+        """SH-001: generate_object_key produces '{date}/{HHmmss}_{method}_{user8}/{name}'."""
+        ts = datetime(2026, 3, 15, 15, 30, 42, tzinfo=timezone.utc)
+        key = generate_object_key(
+            user_id="user-1-abcdef",
+            request_id="req-1",
+            file_id="file-1",
+            original_name="photo.png",
+            method="ocr_paddle_text",
+            created_at=ts,
+        )
+        assert key == "2026-03-15/223042_ocr_paddle_text_user-1-a/photo.png"
+
+    def test_sh001b_generate_object_key_sanitizes_filename(self):
+        """SH-001b: Dangerous path separators are stripped from filename."""
+        ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        key = generate_object_key(
+            user_id="u1234567",
+            request_id="req-1",
+            file_id="file-1",
+            original_name="../../etc/passwd",
+            created_at=ts,
+        )
+        assert ".." not in key
+        assert "etc" not in key.split("/")[0]
+        assert key.endswith("passwd")
+
+    def test_sh002_generate_result_key(self):
+        """SH-002: generate_result_key produces '{date}/{time}_{method}_{user8}/{base}_result.{fmt}'."""
+        ts = datetime(2026, 3, 15, 15, 30, 42, tzinfo=timezone.utc)
+        key = generate_result_key(
+            user_id="user-1-abcdef",
+            request_id="req-1",
+            file_id="file-1",
+            output_format="txt",
+            original_name="invoice.png",
+            method="ocr_paddle_text",
+            created_at=ts,
+        )
+        assert key == "2026-03-15/223042_ocr_paddle_text_user-1-a/invoice_result.txt"
+
+    def test_sh002b_generate_result_key_fallback_file_id(self):
+        """SH-002b: Falls back to file_id prefix when no original_name."""
+        ts = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+        key = generate_result_key(
+            user_id="abcdefgh",
+            request_id="req-1",
+            file_id="f1234567-rest",
+            output_format="json",
+            created_at=ts,
+        )
+        assert "f1234567_result.json" in key
+
+    def test_sh003_parse_object_key(self):
+        """SH-003: parse_object_key extracts date, folder, filename."""
+        result = parse_object_key("2026-03-15/153042_ocr_paddle_text_user1234/photo.png")
+        assert result == {
+            "date": "2026-03-15",
+            "folder": "153042_ocr_paddle_text_user1234",
+            "filename": "photo.png",
         }
-
-    def test_invalid_key_too_short(self):
-        assert parse_object_key("only/two") == {}
-
-    def test_filename_with_slashes(self):
-        parsed = parse_object_key("u/r/f/path/to/file.txt")
-        assert parsed["filename"] == "path/to/file.txt"

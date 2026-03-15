@@ -1,208 +1,290 @@
-"""
-Test cases for M3: RetryOrchestrator + DLQ
+"""Unit tests for RetryOrchestrator (02_backend/app/modules/job/orchestrator.py).
 
-Covers:
-- Retriable failure -> requeue
-- Non-retriable failure -> DLQ
-- Max retries exceeded -> DLQ
-- Retry count increment
-- NATS publish called with correct subject/message
+Service-layer tests with mocked repositories and queue.
+
+Test IDs: RO-001 to RO-015
 """
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
-import json
-from unittest.mock import MagicMock, AsyncMock, patch
-from types import SimpleNamespace
-from pathlib import Path
-import importlib.util
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
+TEST_DIR = Path(__file__).parent
+
+sys.path.insert(0, str(TEST_DIR))
+from conftest import make_job, make_file
+sys.path.pop(0)
 
 
-@pytest.fixture
-def orchestrator_class():
-    logger_mock = MagicMock()
+# ---------------------------------------------------------------------------
+# Load real helper modules (no app deps)
+# ---------------------------------------------------------------------------
+
+def _load_messages():
+    mod_path = BACKEND_ROOT / "app" / "infrastructure" / "queue" / "messages.py"
+    spec = importlib.util.spec_from_file_location("messages", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_subjects():
+    mod_path = BACKEND_ROOT / "app" / "infrastructure" / "queue" / "subjects.py"
+    spec = importlib.util.spec_from_file_location("subjects", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+messages_mod = _load_messages()
+subjects_mod = _load_subjects()
+
+
+# ---------------------------------------------------------------------------
+# Load RetryOrchestrator module
+# ---------------------------------------------------------------------------
+
+def _load_orchestrator():
+    mod_path = BACKEND_ROOT / "app" / "modules" / "job" / "orchestrator.py"
+    spec = importlib.util.spec_from_file_location("orchestrator", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+
     settings_mock = MagicMock()
     settings_mock.max_job_retries = 3
 
-    mocked_modules = {
-        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=logger_mock)),
+    mocked = {
+        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=MagicMock())),
         "app.config": MagicMock(settings=settings_mock),
         "app.infrastructure.database.models": MagicMock(),
         "app.infrastructure.database.repositories": MagicMock(),
-        "app.infrastructure.queue.messages": MagicMock(),
-        "app.infrastructure.queue.subjects": MagicMock(),
+        "app.infrastructure.queue.messages": messages_mod,
+        "app.infrastructure.queue.subjects": subjects_mod,
+        "sqlalchemy": MagicMock(),
+        "sqlalchemy.orm": MagicMock(),
     }
-
-    # Load subjects for real
-    subj_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "infrastructure" / "queue" / "subjects.py"
-    spec_subj = importlib.util.spec_from_file_location("subjects", subj_path)
-    subj_mod = importlib.util.module_from_spec(spec_subj)
-    spec_subj.loader.exec_module(subj_mod)
-    mocked_modules["app.infrastructure.queue.subjects"] = subj_mod
-
-    # Load messages for real
-    msg_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "infrastructure" / "queue" / "messages.py"
-    spec_msg = importlib.util.spec_from_file_location("messages", msg_path)
-    msg_mod = importlib.util.module_from_spec(spec_msg)
-    spec_msg.loader.exec_module(msg_mod)
-    mocked_modules["app.infrastructure.queue.messages"] = msg_mod
-
-    with patch.dict("sys.modules", mocked_modules):
-        orc_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "modules" / "job" / "orchestrator.py"
-        spec = importlib.util.spec_from_file_location("orchestrator", orc_path)
-        mod = importlib.util.module_from_spec(spec)
+    with patch.dict("sys.modules", mocked):
         spec.loader.exec_module(mod)
-        yield mod.RetryOrchestrator
+    return mod
 
 
-def make_job(job_id="job-1", status="FAILED", retry_count=0, error_history="[]",
-             method="ocr_text_raw", tier=0, file_id="file-1", request_id="req-1"):
-    return SimpleNamespace(
-        id=job_id, status=status, retry_count=retry_count,
-        error_history=error_history, method=method, tier=tier,
-        file_id=file_id, request_id=request_id, max_retries=3,
-        request=SimpleNamespace(output_format="txt"),
-    )
+orch_mod = _load_orchestrator()
+RetryOrchestrator = orch_mod.RetryOrchestrator
 
 
-def make_file(object_key="user1/req1/file1/test.png"):
-    return SimpleNamespace(object_key=object_key)
+# ---------------------------------------------------------------------------
+# Fixture: build a fresh RetryOrchestrator with mocked repos
+# ---------------------------------------------------------------------------
 
+@pytest.fixture
+def orch():
+    """Create RetryOrchestrator with mocked repos and queue."""
+    db = MagicMock()
+    queue = AsyncMock()
+    o = RetryOrchestrator(db, queue)
+    o.job_repo = MagicMock()
+    o.file_repo = MagicMock()
+    return o
+
+
+@pytest.fixture
+def orch_no_queue():
+    """Create RetryOrchestrator without queue."""
+    db = MagicMock()
+    o = RetryOrchestrator(db, queue=None)
+    o.job_repo = MagicMock()
+    o.file_repo = MagicMock()
+    return o
+
+
+# ===================================================================
+# decide_retry_or_dlq  (RO-001 to RO-005)
+# ===================================================================
 
 class TestDecideRetryOrDlq:
-    def test_under_limit_retriable_returns_retry(self, orchestrator_class):
-        orc = orchestrator_class(db=MagicMock())
-        job = make_job(retry_count=0)
-        assert orc.decide_retry_or_dlq(job, retriable=True) == "retry"
+    """RO-001 to RO-005: Decide whether to retry or move to DLQ."""
 
-    def test_at_max_retries_returns_dlq(self, orchestrator_class):
-        orc = orchestrator_class(db=MagicMock())
-        job = make_job(retry_count=3)
-        assert orc.decide_retry_or_dlq(job, retriable=True) == "dlq"
+    def test_ro001_retry_when_under_max_retries(self, orch):
+        """RO-001: Returns 'retry' when retry_count < MAX_RETRIES and retriable."""
+        job = make_job(retry_count=0, error_history="[]")
+        assert orch.decide_retry_or_dlq(job, retriable=True) == "retry"
 
-    def test_over_max_retries_returns_dlq(self, orchestrator_class):
-        orc = orchestrator_class(db=MagicMock())
-        job = make_job(retry_count=5)
-        assert orc.decide_retry_or_dlq(job, retriable=True) == "dlq"
+    def test_ro002_dlq_when_max_retries_exceeded(self, orch):
+        """RO-002: Returns 'dlq' when retry_count >= MAX_RETRIES."""
+        job = make_job(retry_count=3, error_history="[]")
+        assert orch.decide_retry_or_dlq(job, retriable=True) == "dlq"
 
-    def test_non_retriable_returns_dlq(self, orchestrator_class):
-        orc = orchestrator_class(db=MagicMock())
-        job = make_job(retry_count=0)
-        assert orc.decide_retry_or_dlq(job, retriable=False) == "dlq"
+    def test_ro003_dlq_when_not_retriable(self, orch):
+        """RO-003: Returns 'dlq' when retriable=False."""
+        job = make_job(retry_count=0, error_history="[]")
+        assert orch.decide_retry_or_dlq(job, retriable=False) == "dlq"
 
-    def test_non_retriable_last_error_returns_dlq(self, orchestrator_class):
-        orc = orchestrator_class(db=MagicMock())
-        history = json.dumps([{"error": "bad format", "retriable": False}])
+    def test_ro004_dlq_when_last_error_not_retriable(self, orch):
+        """RO-004: Returns 'dlq' when last error in history is not retriable."""
+        history = json.dumps([{"error": "fatal", "retriable": False}])
         job = make_job(retry_count=0, error_history=history)
-        assert orc.decide_retry_or_dlq(job, retriable=True) == "dlq"
+        assert orch.decide_retry_or_dlq(job, retriable=True) == "dlq"
 
+    def test_ro005_retry_when_error_history_malformed(self, orch):
+        """RO-005: Returns 'retry' when error_history is malformed JSON (falls through)."""
+        job = make_job(retry_count=0, error_history="not valid json")
+        assert orch.decide_retry_or_dlq(job, retriable=True) == "retry"
+
+
+# ===================================================================
+# handle_failure  (RO-006 to RO-008)
+# ===================================================================
 
 class TestHandleFailure:
-    @pytest.mark.asyncio
-    async def test_retriable_requeues(self, orchestrator_class):
-        queue = MagicMock()
-        queue.publish = AsyncMock()
-        orc = orchestrator_class(db=MagicMock(), queue=queue)
-        orc.job_repo.increment_retry = MagicMock()
-        orc.job_repo.update_status = MagicMock()
-        orc.file_repo.get_active = MagicMock(return_value=make_file())
-
-        job = make_job(retry_count=0)
-        await orc.handle_failure(job, "timeout", retriable=True)
-
-        orc.job_repo.increment_retry.assert_called_once()
-        orc.job_repo.update_status.assert_called_once()
-        queue.publish.assert_called_once()
-        # Verify subject is ocr.ocr_text_raw.tier0
-        call_args = queue.publish.call_args
-        assert call_args[0][0] == "ocr.ocr_text_raw.tier0"
+    """RO-006 to RO-008: Handle job failure with retry or DLQ."""
 
     @pytest.mark.asyncio
-    async def test_non_retriable_moves_to_dlq(self, orchestrator_class):
-        queue = MagicMock()
-        queue.publish = AsyncMock()
-        orc = orchestrator_class(db=MagicMock(), queue=queue)
-        orc.job_repo.update_status = MagicMock()
-        orc.file_repo.get_active = MagicMock(return_value=make_file())
+    async def test_ro006_calls_requeue_when_retry(self, orch):
+        """RO-006: Calls requeue_job when decide returns 'retry'."""
+        job = make_job(retry_count=0, error_history="[]")
+        orch.requeue_job = AsyncMock()
+        orch.move_to_dlq = AsyncMock()
 
-        job = make_job(retry_count=0)
-        await orc.handle_failure(job, "invalid input", retriable=False)
-
-        orc.job_repo.update_status.assert_called_once()
-        call_args = queue.publish.call_args
-        # Should use DLQ subject
-        assert call_args[0][0] == "dlq.ocr_text_raw.tier0"
+        await orch.handle_failure(job, "timeout", retriable=True)
+        orch.requeue_job.assert_awaited_once_with(job)
+        orch.move_to_dlq.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_max_retries_moves_to_dlq(self, orchestrator_class):
-        queue = MagicMock()
-        queue.publish = AsyncMock()
-        orc = orchestrator_class(db=MagicMock(), queue=queue)
-        orc.job_repo.update_status = MagicMock()
-        orc.file_repo.get_active = MagicMock(return_value=make_file())
+    async def test_ro007_calls_dlq_when_max_retries(self, orch):
+        """RO-007: Calls move_to_dlq when decide returns 'dlq'."""
+        job = make_job(retry_count=3, error_history="[]")
+        orch.requeue_job = AsyncMock()
+        orch.move_to_dlq = AsyncMock()
 
-        job = make_job(retry_count=3)
-        await orc.handle_failure(job, "still failing", retriable=True)
+        await orch.handle_failure(job, "fatal error", retriable=True)
+        orch.move_to_dlq.assert_awaited_once_with(job)
+        orch.requeue_job.assert_not_awaited()
 
-        call_args = queue.publish.call_args
-        assert call_args[0][0] == "dlq.ocr_text_raw.tier0"
+    @pytest.mark.asyncio
+    async def test_ro008_calls_dlq_when_not_retriable(self, orch):
+        """RO-008: Calls move_to_dlq when retriable=False."""
+        job = make_job(retry_count=0, error_history="[]")
+        orch.requeue_job = AsyncMock()
+        orch.move_to_dlq = AsyncMock()
 
+        await orch.handle_failure(job, "permanent error", retriable=False)
+        orch.move_to_dlq.assert_awaited_once_with(job)
+        orch.requeue_job.assert_not_awaited()
+
+
+# ===================================================================
+# requeue_job  (RO-009 to RO-011)
+# ===================================================================
 
 class TestRequeueJob:
-    @pytest.mark.asyncio
-    async def test_requeue_increments_retry(self, orchestrator_class):
-        queue = MagicMock()
-        queue.publish = AsyncMock()
-        orc = orchestrator_class(db=MagicMock(), queue=queue)
-        orc.job_repo.increment_retry = MagicMock()
-        orc.job_repo.update_status = MagicMock()
-        orc.file_repo.get_active = MagicMock(return_value=make_file())
-
-        job = make_job(retry_count=1)
-        await orc.requeue_job(job)
-
-        orc.job_repo.increment_retry.assert_called_once_with(job)
-        orc.job_repo.update_status.assert_called_once_with(job, status="QUEUED")
-        queue.publish.assert_called_once()
+    """RO-009 to RO-011: Requeue job for retry."""
 
     @pytest.mark.asyncio
-    async def test_requeue_without_queue_no_error(self, orchestrator_class):
-        orc = orchestrator_class(db=MagicMock(), queue=None)
-        orc.job_repo.increment_retry = MagicMock()
-        orc.job_repo.update_status = MagicMock()
+    async def test_ro009_increments_retry_and_sets_queued(self, orch):
+        """RO-009: Increments retry count and sets status to QUEUED."""
+        job = make_job(job_id="job-1", method="ocr_paddle_text", tier=0, retry_count=1)
+        file = make_file(file_id="file-1")
+        orch.file_repo.get_active.return_value = file
 
-        job = make_job()
-        await orc.requeue_job(job)
-        orc.job_repo.update_status.assert_called_once()
+        await orch.requeue_job(job)
+        orch.job_repo.increment_retry.assert_called_once_with(job)
+        orch.job_repo.update_status.assert_called_once_with(job, status="QUEUED")
 
+    @pytest.mark.asyncio
+    async def test_ro010_publishes_to_correct_subject(self, orch):
+        """RO-010: Publishes message to correct NATS subject."""
+        job = make_job(job_id="job-1", method="ocr_paddle_text", tier=0)
+        file = make_file(file_id="file-1")
+        orch.file_repo.get_active.return_value = file
+
+        await orch.requeue_job(job)
+        expected_subject = "ocr.ocr_paddle_text.tier0"
+        orch.queue.publish.assert_awaited_once()
+        call_args = orch.queue.publish.call_args
+        assert call_args[0][0] == expected_subject
+
+    @pytest.mark.asyncio
+    async def test_ro011_no_publish_when_queue_unavailable(self, orch_no_queue):
+        """RO-011: Sets QUEUED but does not publish when queue is None."""
+        job = make_job(job_id="job-1", method="ocr_paddle_text", tier=0)
+        file = make_file(file_id="file-1")
+        orch_no_queue.file_repo.get_active.return_value = file
+
+        await orch_no_queue.requeue_job(job)
+        orch_no_queue.job_repo.increment_retry.assert_called_once_with(job)
+        orch_no_queue.job_repo.update_status.assert_called_once_with(job, status="QUEUED")
+
+
+# ===================================================================
+# move_to_dlq  (RO-012 to RO-014)
+# ===================================================================
 
 class TestMoveToDlq:
-    @pytest.mark.asyncio
-    async def test_dlq_sets_dead_letter_status(self, orchestrator_class):
-        queue = MagicMock()
-        queue.publish = AsyncMock()
-        orc = orchestrator_class(db=MagicMock(), queue=queue)
-        orc.job_repo.update_status = MagicMock()
-        orc.file_repo.get_active = MagicMock(return_value=make_file())
-
-        job = make_job()
-        await orc.move_to_dlq(job)
-
-        orc.job_repo.update_status.assert_called_once_with(job, status="DEAD_LETTER")
-        queue.publish.assert_called_once()
+    """RO-012 to RO-014: Move job to Dead Letter Queue."""
 
     @pytest.mark.asyncio
-    async def test_dlq_message_contains_job_info(self, orchestrator_class):
-        queue = MagicMock()
-        queue.publish = AsyncMock()
-        orc = orchestrator_class(db=MagicMock(), queue=queue)
-        orc.job_repo.update_status = MagicMock()
-        orc.file_repo.get_active = MagicMock(return_value=make_file("uploads/test.png"))
+    async def test_ro012_sets_dead_letter_status(self, orch):
+        """RO-012: Updates job status to DEAD_LETTER."""
+        job = make_job(job_id="job-1", method="ocr_paddle_text", tier=0)
+        file = make_file(file_id="file-1")
+        orch.file_repo.get_active.return_value = file
 
-        job = make_job(job_id="j-123", request_id="r-456", retry_count=3)
-        await orc.move_to_dlq(job)
+        await orch.move_to_dlq(job)
+        orch.job_repo.update_status.assert_called_once_with(job, status="DEAD_LETTER")
 
-        msg = queue.publish.call_args[0][1]
-        assert msg.job_id == "j-123"
-        assert msg.request_id == "r-456"
-        assert msg.retry_count == 3
-        assert msg.object_key == "uploads/test.png"
+    @pytest.mark.asyncio
+    async def test_ro013_publishes_to_dlq_subject(self, orch):
+        """RO-013: Publishes to DLQ NATS subject."""
+        job = make_job(job_id="job-1", method="ocr_paddle_text", tier=0)
+        file = make_file(file_id="file-1")
+        orch.file_repo.get_active.return_value = file
+
+        await orch.move_to_dlq(job)
+        expected_subject = "dlq.ocr_paddle_text.tier0"
+        orch.queue.publish.assert_awaited_once()
+        call_args = orch.queue.publish.call_args
+        assert call_args[0][0] == expected_subject
+
+    @pytest.mark.asyncio
+    async def test_ro014_no_publish_when_queue_unavailable(self, orch_no_queue):
+        """RO-014: Sets DEAD_LETTER but does not publish when queue is None."""
+        job = make_job(job_id="job-1", method="ocr_paddle_text", tier=0)
+
+        await orch_no_queue.move_to_dlq(job)
+        orch_no_queue.job_repo.update_status.assert_called_once_with(job, status="DEAD_LETTER")
+
+
+# ===================================================================
+# _build_message  (RO-015)
+# ===================================================================
+
+class TestBuildMessage:
+    """RO-015: Build JobMessage from job + file."""
+
+    def test_ro015_builds_correct_message(self, orch):
+        """RO-015: Builds JobMessage with all fields from job and file."""
+        job = make_job(
+            job_id="job-1", file_id="file-1", request_id="req-1",
+            method="ocr_paddle_text", tier=0, retry_count=2,
+        )
+        file = make_file(file_id="file-1", object_key="u1/r1/f1/test.png")
+        orch.file_repo.get_active.return_value = file
+
+        msg = orch._build_message(job)
+        assert msg.job_id == "job-1"
+        assert msg.file_id == "file-1"
+        assert msg.request_id == "req-1"
+        assert msg.method == "ocr_paddle_text"
+        assert msg.tier == 0
+        assert msg.output_format == "txt"
+        assert msg.object_key == "u1/r1/f1/test.png"
+        assert msg.retry_count == 2

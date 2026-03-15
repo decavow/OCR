@@ -7,6 +7,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.core.context import job_id_ctx
 from app.core.shutdown import GracefulShutdown
 from app.core.processor import OCRProcessor
 from app.core.state import WorkerState
@@ -37,6 +38,7 @@ class OCRWorker:
         self._access_key: Optional[str] = settings.worker_access_key
         self.is_approved = self._access_key is not None
         self.is_draining = False
+        self._re_register_attempts = 0
 
     async def start(self) -> None:
         """Start worker: register and connect to services."""
@@ -107,16 +109,21 @@ class OCRWorker:
         action = response.get("action", "continue")
 
         if action == "continue":
-            pass  # No change
+            self._re_register_attempts = 0  # Reset on success
 
         elif action == "approved":
             # First time receiving approval
+            self._re_register_attempts = 0
             access_key = response.get("access_key")
             if access_key:
                 self._set_access_key(access_key)
                 logger.info("Service type APPROVED! Starting job processing.")
             else:
                 logger.warning("Received 'approved' action but no access_key in response")
+
+        elif action == "re_register":
+            # Instance not found on backend → re-register
+            await self._retry_registration()
 
         elif action == "drain":
             # Finish current job, don't take new ones
@@ -128,6 +135,38 @@ class OCRWorker:
             reason = response.get("rejection_reason", "Unknown")
             logger.error(f"Received SHUTDOWN signal. Reason: {reason}")
             await self._graceful_shutdown()
+
+    async def _retry_registration(self) -> None:
+        """Re-register with backend after losing instance state (e.g. backend restart)."""
+        self._re_register_attempts += 1
+        # Exponential backoff: 0s, 5s, 10s, 20s, 40s, ... capped at 60s
+        if self._re_register_attempts > 1:
+            delay = min(5 * (2 ** (self._re_register_attempts - 2)), 60)
+            logger.info(f"Re-registration attempt #{self._re_register_attempts}, waiting {delay}s...")
+            await asyncio.sleep(delay)
+
+        try:
+            reg_result = await self._register()
+
+            if reg_result.get("type_status") == "REJECTED":
+                logger.error("Service type REJECTED on re-registration. Shutting down.")
+                await self._graceful_shutdown()
+                return
+
+            if reg_result.get("access_key"):
+                self._set_access_key(reg_result["access_key"])
+                logger.info("Re-registered and approved. Ready to process jobs.")
+            else:
+                logger.info(
+                    f"Re-registered. Type status: {reg_result.get('type_status')}. "
+                    "Waiting for approval..."
+                )
+                self.is_approved = False
+
+            self._re_register_attempts = 0
+
+        except Exception as e:
+            logger.warning(f"Re-registration failed: {e}")
 
     async def _graceful_shutdown(self) -> None:
         """Cleanup and exit."""
@@ -179,7 +218,12 @@ class OCRWorker:
                     continue
 
                 # Process job
-                await self.process_job(job)
+                job_id_val = job.get("job_id", "")
+                token = job_id_ctx.set(job_id_val)
+                try:
+                    await self.process_job(job)
+                finally:
+                    job_id_ctx.reset(token)
 
             except Exception as e:
                 logger.error(f"Error in main loop: {e}", exc_info=True)
@@ -231,6 +275,8 @@ class OCRWorker:
                 result_content_type = "application/json"
             elif fmt == "md":
                 result_content_type = "text/markdown"
+            elif fmt == "html":
+                result_content_type = "text/html"
             else:
                 result_content_type = "text/plain"
 

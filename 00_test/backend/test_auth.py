@@ -1,202 +1,310 @@
-"""
-Test cases for Auth API.
+"""Unit tests for AuthService (02_backend/app/modules/auth/service.py).
 
-Endpoints:
-  - POST /api/v1/auth/register
-  - POST /api/v1/auth/login
-  - POST /api/v1/auth/logout
-  - GET /api/v1/auth/me
+Service-level tests with mocked repositories. Tests register, login, logout,
+and validate_session methods.
+
+Test IDs: AU-001 to AU-010
 """
 
-import time
+import importlib.util
+import hashlib
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
-import httpx
 
-API_V1 = "http://localhost:8000/api/v1"
+# ---------------------------------------------------------------------------
+# Module loader
+# ---------------------------------------------------------------------------
 
-
-class TestAuthRegister:
-    """Tests for POST /auth/register."""
-
-    @pytest.mark.asyncio
-    async def test_register_success(self, client):
-        """Should register new user successfully."""
-        email = f"register_test_{int(time.time())}@example.com"
-
-        resp = await client.post(
-            f"{API_V1}/auth/register",
-            json={"email": email, "password": "password123"}
-        )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "token" in data
-        assert "user" in data
-        assert data["user"]["email"] == email
-        assert "expires_at" in data
-
-    @pytest.mark.asyncio
-    async def test_register_duplicate_email(self, client):
-        """Should reject duplicate email."""
-        email = f"dup_test_{int(time.time())}@example.com"
-
-        # First registration
-        resp1 = await client.post(
-            f"{API_V1}/auth/register",
-            json={"email": email, "password": "password123"}
-        )
-        assert resp1.status_code == 200
-
-        # Duplicate registration
-        resp2 = await client.post(
-            f"{API_V1}/auth/register",
-            json={"email": email, "password": "different123"}
-        )
-        assert resp2.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_register_invalid_email(self, client):
-        """Should reject invalid email format."""
-        resp = await client.post(
-            f"{API_V1}/auth/register",
-            json={"email": "not-an-email", "password": "password123"}
-        )
-        assert resp.status_code == 422  # Validation error
-
-    @pytest.mark.asyncio
-    async def test_register_missing_password(self, client):
-        """Should reject missing password."""
-        resp = await client.post(
-            f"{API_V1}/auth/register",
-            json={"email": "test@example.com"}
-        )
-        assert resp.status_code == 422
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
 
-class TestAuthLogin:
-    """Tests for POST /auth/login."""
+def _load_auth_exceptions():
+    """Load auth exceptions with real base exception classes."""
+    # Load core exceptions (pure Python, no deps)
+    exc_path = BACKEND_ROOT / "app" / "core" / "exceptions.py"
+    spec = importlib.util.spec_from_file_location("core_exceptions_au", exc_path)
+    exc_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(exc_mod)
 
-    @pytest.mark.asyncio
-    async def test_login_success(self, client):
-        """Should login with valid credentials."""
-        email = f"login_test_{int(time.time())}@example.com"
-        password = "password123"
+    # Load auth exceptions with core exceptions available
+    auth_exc_path = BACKEND_ROOT / "app" / "modules" / "auth" / "exceptions.py"
+    spec2 = importlib.util.spec_from_file_location("auth_exceptions_au", auth_exc_path)
+    mod2 = importlib.util.module_from_spec(spec2)
 
-        # Register first
-        await client.post(
-            f"{API_V1}/auth/register",
-            json={"email": email, "password": password}
-        )
-
-        # Login
-        resp = await client.post(
-            f"{API_V1}/auth/login",
-            json={"email": email, "password": password}
-        )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "token" in data
-        assert data["user"]["email"] == email
-
-    @pytest.mark.asyncio
-    async def test_login_wrong_password(self, client):
-        """Should reject wrong password."""
-        email = f"wrong_pw_{int(time.time())}@example.com"
-
-        # Register
-        await client.post(
-            f"{API_V1}/auth/register",
-            json={"email": email, "password": "correctpassword"}
-        )
-
-        # Login with wrong password
-        resp = await client.post(
-            f"{API_V1}/auth/login",
-            json={"email": email, "password": "wrongpassword"}
-        )
-
-        assert resp.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_login_nonexistent_user(self, client):
-        """Should reject non-existent user."""
-        resp = await client.post(
-            f"{API_V1}/auth/login",
-            json={"email": "nonexistent@example.com", "password": "password123"}
-        )
-
-        assert resp.status_code == 401
+    mocked = {
+        "app.core.exceptions": exc_mod,
+    }
+    with patch.dict("sys.modules", mocked):
+        spec2.loader.exec_module(mod2)
+    return exc_mod, mod2
 
 
-class TestAuthLogout:
-    """Tests for POST /auth/logout."""
+def _load_auth_service(auth_exc_mod):
+    """Load AuthService with mocked repos, mocked bcrypt utils."""
+    mod_path = BACKEND_ROOT / "app" / "modules" / "auth" / "service.py"
+    spec = importlib.util.spec_from_file_location("auth_service_au", mod_path)
+    mod = importlib.util.module_from_spec(spec)
 
-    @pytest.mark.asyncio
-    async def test_logout_success(self, client, auth_headers):
-        """Should logout successfully."""
-        resp = await client.post(
-            f"{API_V1}/auth/logout",
-            headers=auth_headers
-        )
+    # Create simple hash/verify functions that don't need bcrypt
+    def fake_hash_password(password):
+        return "hashed:" + hashlib.sha256(password.encode()).hexdigest()
 
-        assert resp.status_code == 200
-        assert "message" in resp.json()
+    def fake_verify_password(password, hashed):
+        return hashed == "hashed:" + hashlib.sha256(password.encode()).hexdigest()
 
-    @pytest.mark.asyncio
-    async def test_logout_invalidates_token(self, client, auth_headers):
-        """Should invalidate token after logout."""
-        # Logout
-        await client.post(f"{API_V1}/auth/logout", headers=auth_headers)
+    # Build a utils mock with our fake functions
+    utils_mock_module = MagicMock()
+    utils_mock_module.hash_password = fake_hash_password
+    utils_mock_module.verify_password = fake_verify_password
 
-        # Try to access protected endpoint
-        resp = await client.get(f"{API_V1}/auth/me", headers=auth_headers)
-        assert resp.status_code == 401
+    # Auth exceptions module namespace
+    auth_exc_ns = MagicMock()
+    auth_exc_ns.InvalidCredentials = auth_exc_mod.InvalidCredentials
+    auth_exc_ns.UserAlreadyExists = auth_exc_mod.UserAlreadyExists
+    auth_exc_ns.UserNotFound = auth_exc_mod.UserNotFound
 
-    @pytest.mark.asyncio
-    async def test_logout_without_token(self, client):
-        """Should handle logout without token gracefully."""
-        resp = await client.post(f"{API_V1}/auth/logout")
-        assert resp.status_code == 200
+    # Build parent package mock so relative imports resolve
+    parent_pkg = MagicMock()
+    parent_pkg.utils = utils_mock_module
+    parent_pkg.exceptions = auth_exc_ns
+
+    mocked = {
+        "app": MagicMock(),
+        "app.modules": MagicMock(),
+        "app.modules.auth": parent_pkg,
+        "app.infrastructure.database.models": MagicMock(),
+        "app.infrastructure.database.repositories": MagicMock(),
+        "app.config": MagicMock(settings=MagicMock(session_expire_hours=24)),
+        "app.modules.auth.utils": utils_mock_module,
+        "app.modules.auth.exceptions": auth_exc_ns,
+        "sqlalchemy": MagicMock(),
+        "sqlalchemy.orm": MagicMock(),
+    }
+
+    # Set __package__ so relative imports work
+    mod.__package__ = "app.modules.auth"
+
+    with patch.dict("sys.modules", mocked):
+        spec.loader.exec_module(mod)
+
+    # Attach our fake functions so tests can use them
+    mod._fake_hash_password = fake_hash_password
+    mod._fake_verify_password = fake_verify_password
+
+    return mod
 
 
-class TestAuthMe:
-    """Tests for GET /auth/me."""
+# Load modules
+core_exc_mod, auth_exc_mod = _load_auth_exceptions()
+auth_svc_mod = _load_auth_service(auth_exc_mod)
 
-    @pytest.mark.asyncio
-    async def test_get_me_success(self, client, auth_headers):
-        """Should return current user info."""
-        resp = await client.get(
-            f"{API_V1}/auth/me",
-            headers=auth_headers
-        )
+AuthService = auth_svc_mod.AuthService
+InvalidCredentials = auth_exc_mod.InvalidCredentials
+UserAlreadyExists = auth_exc_mod.UserAlreadyExists
+UserNotFound = auth_exc_mod.UserNotFound
+fake_hash = auth_svc_mod._fake_hash_password
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "id" in data
-        assert "email" in data
-        assert "created_at" in data
 
-    @pytest.mark.asyncio
-    async def test_get_me_no_token(self, client):
-        """Should reject request without token."""
-        resp = await client.get(f"{API_V1}/auth/me")
-        assert resp.status_code == 401
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    @pytest.mark.asyncio
-    async def test_get_me_invalid_token(self, client):
-        """Should reject invalid token."""
-        resp = await client.get(
-            f"{API_V1}/auth/me",
-            headers={"Authorization": "Bearer invalid_token_here"}
-        )
-        assert resp.status_code == 401
+def _make_user(user_id="user-1", email="test@test.com", password="password123", deleted_at=None):
+    """Create a mock user with hashed password."""
+    hashed = fake_hash(password)
+    return SimpleNamespace(
+        id=user_id,
+        email=email,
+        password_hash=hashed,
+        deleted_at=deleted_at,
+    )
 
-    @pytest.mark.asyncio
-    async def test_get_me_malformed_header(self, client):
-        """Should reject malformed auth header."""
-        resp = await client.get(
-            f"{API_V1}/auth/me",
-            headers={"Authorization": "NotBearer token"}
-        )
-        assert resp.status_code == 401
+
+def _make_session(session_id="sess-1", user_id="user-1", token="valid-token"):
+    return SimpleNamespace(
+        id=session_id,
+        user_id=user_id,
+        token=token,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def svc():
+    """Create AuthService with mocked repos."""
+    db = MagicMock()
+    service = AuthService(db)
+    service.user_repo = MagicMock()
+    service.session_repo = MagicMock()
+    return service
+
+
+# ===================================================================
+# register  (AU-001 to AU-002)
+# ===================================================================
+
+class TestRegister:
+    """AU-001 to AU-002: User registration."""
+
+    def test_au001_register_valid_returns_user(self, svc):
+        """AU-001: Register with new email creates and returns user."""
+        svc.user_repo.get_by_email.return_value = None
+        created_user = _make_user(email="new@test.com")
+        svc.user_repo.create_user.return_value = created_user
+
+        result = svc.register("new@test.com", "securepass")
+
+        assert result is created_user
+        svc.user_repo.get_by_email.assert_called_once_with("new@test.com")
+        svc.user_repo.create_user.assert_called_once()
+        # Verify password was hashed (second arg should not be plaintext)
+        call_args = svc.user_repo.create_user.call_args
+        assert call_args[0][0] == "new@test.com"
+        assert call_args[0][1] != "securepass"  # Should be hashed
+        assert call_args[0][1].startswith("hashed:")  # Our fake hash format
+
+    def test_au002_register_duplicate_raises(self, svc):
+        """AU-002: Register with existing email raises UserAlreadyExists."""
+        svc.user_repo.get_by_email.return_value = _make_user(email="exists@test.com")
+
+        with pytest.raises(UserAlreadyExists) as exc_info:
+            svc.register("exists@test.com", "password")
+
+        assert "exists@test.com" in str(exc_info.value)
+        svc.user_repo.create_user.assert_not_called()
+
+
+# ===================================================================
+# login  (AU-003 to AU-005)
+# ===================================================================
+
+class TestLogin:
+    """AU-003 to AU-005: User login."""
+
+    def test_au003_login_valid_credentials(self, svc):
+        """AU-003: Login with correct email+password returns (user, session)."""
+        user = _make_user(email="user@test.com", password="correctpass")
+        session = _make_session(user_id=user.id)
+        svc.user_repo.get_by_email.return_value = user
+        svc.session_repo.create_session.return_value = session
+
+        result = svc.login("user@test.com", "correctpass")
+
+        assert result[0] is user
+        assert result[1] is session
+        svc.session_repo.create_session.assert_called_once()
+
+    def test_au004_login_wrong_password_raises(self, svc):
+        """AU-004: Login with wrong password raises InvalidCredentials."""
+        user = _make_user(email="user@test.com", password="correctpass")
+        svc.user_repo.get_by_email.return_value = user
+
+        with pytest.raises(InvalidCredentials):
+            svc.login("user@test.com", "wrongpass")
+
+        svc.session_repo.create_session.assert_not_called()
+
+    def test_au005_login_nonexistent_user_raises(self, svc):
+        """AU-005: Login with non-existent email raises InvalidCredentials."""
+        svc.user_repo.get_by_email.return_value = None
+
+        with pytest.raises(InvalidCredentials):
+            svc.login("nobody@test.com", "anypass")
+
+
+# ===================================================================
+# logout  (AU-006 to AU-007)
+# ===================================================================
+
+class TestLogout:
+    """AU-006 to AU-007: User logout."""
+
+    def test_au006_logout_valid_token(self, svc):
+        """AU-006: Logout with valid token deletes session and returns True."""
+        session = _make_session(token="valid-token")
+        svc.session_repo.get_valid.return_value = session
+
+        result = svc.logout("valid-token")
+
+        assert result is True
+        svc.session_repo.delete.assert_called_once_with(session)
+
+    def test_au007_logout_invalid_token(self, svc):
+        """AU-007: Logout with invalid token returns False gracefully."""
+        svc.session_repo.get_valid.return_value = None
+
+        result = svc.logout("invalid-token")
+
+        assert result is False
+        svc.session_repo.delete.assert_not_called()
+
+
+# ===================================================================
+# validate_session  (AU-008 to AU-010)
+# ===================================================================
+
+class TestValidateSession:
+    """AU-008 to AU-010: Session validation."""
+
+    def test_au008_validate_valid_session(self, svc):
+        """AU-008: Valid session returns the user."""
+        session = _make_session(user_id="user-1", token="valid-token")
+        user = _make_user(user_id="user-1")
+        svc.session_repo.get_valid.return_value = session
+        svc.user_repo.get.return_value = user
+
+        result = svc.validate_session("valid-token")
+
+        assert result is user
+
+    def test_au009_validate_expired_session(self, svc):
+        """AU-009: Expired session (get_valid returns None) returns None."""
+        svc.session_repo.get_valid.return_value = None
+
+        result = svc.validate_session("expired-token")
+
+        assert result is None
+
+    def test_au010_validate_invalid_token(self, svc):
+        """AU-010: Invalid token (no session found) returns None."""
+        svc.session_repo.get_valid.return_value = None
+
+        result = svc.validate_session("nonexistent-token")
+
+        assert result is None
+
+
+# ===================================================================
+# Edge cases: validate_session with deleted user
+# ===================================================================
+
+class TestValidateSessionEdgeCases:
+    """Additional edge cases for validate_session."""
+
+    def test_au008b_validate_session_deleted_user_returns_none(self, svc):
+        """AU-008b: Valid session but user is soft-deleted returns None."""
+        from datetime import datetime, timezone
+        session = _make_session(user_id="user-1", token="valid-token")
+        user = _make_user(user_id="user-1", deleted_at=datetime.now(timezone.utc))
+        svc.session_repo.get_valid.return_value = session
+        svc.user_repo.get.return_value = user
+
+        result = svc.validate_session("valid-token")
+
+        assert result is None
+
+    def test_au008c_validate_session_user_not_found_returns_none(self, svc):
+        """AU-008c: Valid session but user no longer exists returns None."""
+        session = _make_session(user_id="user-gone", token="valid-token")
+        svc.session_repo.get_valid.return_value = session
+        svc.user_repo.get.return_value = None
+
+        result = svc.validate_session("valid-token")
+
+        assert result is None

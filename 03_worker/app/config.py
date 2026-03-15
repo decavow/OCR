@@ -31,7 +31,7 @@ class Settings:
     worker_access_key: Optional[str] = _access_key_env if _access_key_env else None
 
     # Queue routing
-    worker_filter_subject: str = os.getenv("WORKER_FILTER_SUBJECT", "ocr.ocr_text_raw.tier0")
+    worker_filter_subject: str = os.getenv("WORKER_FILTER_SUBJECT", "ocr.ocr_paddle_text.tier0")
 
     # Registration info
     worker_display_name: str = os.getenv("WORKER_DISPLAY_NAME", "OCR Worker")
@@ -41,7 +41,7 @@ class Settings:
     # Capabilities
     @property
     def worker_allowed_methods(self) -> List[str]:
-        methods_str = os.getenv("WORKER_ALLOWED_METHODS", "ocr_text_raw")
+        methods_str = os.getenv("WORKER_ALLOWED_METHODS", "ocr_paddle_text")
         return [m.strip() for m in methods_str.split(",") if m.strip()]
 
     @property
@@ -66,6 +66,9 @@ class Settings:
     # Config
     heartbeat_interval_ms: int = int(os.getenv("HEARTBEAT_INTERVAL_MS", "30000"))
     job_timeout_seconds: int = int(os.getenv("JOB_TIMEOUT_SECONDS", "300"))
+
+    # Debug: save intermediate images, raw JSON, bounding box overlays
+    debug_ocr: bool = os.getenv("DEBUG_OCR", "false").lower() == "true"
 
     # Local temp directory
     temp_dir: str = os.getenv("TEMP_DIR", "/tmp/ocr_worker")

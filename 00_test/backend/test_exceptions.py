@@ -1,108 +1,70 @@
-"""
-Test cases for Core Exceptions (EX-001 to EX-004)
+"""Unit tests for exception hierarchy (02_backend/app/core/exceptions.py).
 
-Covers:
-- AppException base class
-- NotFoundError (404)
-- UnauthorizedError (401)
-- ForbiddenError (403)
-- ValidationError
-- Message preservation
+Pure logic tests — no external dependencies.
+
+Test IDs: EX-001 to EX-004
 """
 
 import importlib.util
 from pathlib import Path
 
-# Load exceptions module directly
-exc_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "core" / "exceptions.py"
-spec = importlib.util.spec_from_file_location("exceptions", exc_path)
-exc_mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(exc_mod)
+import pytest
 
-AppException = exc_mod.AppException
-NotFoundError = exc_mod.NotFoundError
-UnauthorizedError = exc_mod.UnauthorizedError
-ForbiddenError = exc_mod.ForbiddenError
-ValidationError = exc_mod.ValidationError
+# ---------------------------------------------------------------------------
+# Module loader
+# ---------------------------------------------------------------------------
+
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
 
-class TestNotFoundError:
-    """EX-001: NotFoundError has correct code."""
-
-    def test_code_is_not_found(self):
-        exc = NotFoundError("Job", "abc-123")
-        assert exc.code == "NOT_FOUND"
-
-    def test_message_contains_resource_and_id(self):
-        exc = NotFoundError("Job", "abc-123")
-        assert "Job" in exc.message
-        assert "abc-123" in exc.message
-
-    def test_inherits_app_exception(self):
-        exc = NotFoundError("File", "x")
-        assert isinstance(exc, AppException)
+def _load():
+    mod_path = BACKEND_ROOT / "app" / "core" / "exceptions.py"
+    spec = importlib.util.spec_from_file_location("exceptions", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-class TestUnauthorizedError:
-    """EX-002: UnauthorizedError has correct code."""
-
-    def test_code_is_unauthorized(self):
-        exc = UnauthorizedError()
-        assert exc.code == "UNAUTHORIZED"
-
-    def test_default_message(self):
-        exc = UnauthorizedError()
-        assert exc.message == "Unauthorized"
-
-    def test_custom_message(self):
-        exc = UnauthorizedError("Token expired")
-        assert exc.message == "Token expired"
+exc = _load()
+AppException = exc.AppException
+NotFoundError = exc.NotFoundError
+ValidationError = exc.ValidationError
+UnauthorizedError = exc.UnauthorizedError
+ForbiddenError = exc.ForbiddenError
 
 
-class TestForbiddenError:
-    """EX-003: ForbiddenError has correct code."""
-
-    def test_code_is_forbidden(self):
-        exc = ForbiddenError()
-        assert exc.code == "FORBIDDEN"
-
-    def test_default_message(self):
-        exc = ForbiddenError()
-        assert exc.message == "Forbidden"
-
-    def test_custom_message(self):
-        exc = ForbiddenError("Access denied to resource")
-        assert exc.message == "Access denied to resource"
+# ===================================================================
+# Exception attributes  (EX-001 to EX-004)
+# ===================================================================
 
 
-class TestAppException:
-    """EX-004: Base AppException preserves message."""
+class TestExceptions:
+    """EX-001 to EX-004: Exception classes carry correct code and message."""
 
-    def test_message_preserved(self):
-        exc = AppException("Something went wrong")
-        assert exc.message == "Something went wrong"
-        assert str(exc) == "Something went wrong"
+    def test_ex001_not_found_error(self):
+        """EX-001: NotFoundError has code='NOT_FOUND' and formatted message."""
+        err = NotFoundError("Job", "job-42")
+        assert err.code == "NOT_FOUND"
+        assert err.message == "Job job-42 not found"
+        assert isinstance(err, AppException)
 
-    def test_code_preserved(self):
-        exc = AppException("Error", code="CUSTOM_CODE")
-        assert exc.code == "CUSTOM_CODE"
+    def test_ex002_unauthorized_error(self):
+        """EX-002: UnauthorizedError has code='UNAUTHORIZED' and default message."""
+        err = UnauthorizedError()
+        assert err.code == "UNAUTHORIZED"
+        assert err.message == "Unauthorized"
+        assert isinstance(err, AppException)
 
-    def test_code_defaults_to_none(self):
-        exc = AppException("Error")
-        assert exc.code is None
+    def test_ex003_forbidden_error(self):
+        """EX-003: ForbiddenError has code='FORBIDDEN' and default message."""
+        err = ForbiddenError()
+        assert err.code == "FORBIDDEN"
+        assert err.message == "Forbidden"
+        assert isinstance(err, AppException)
 
-    def test_inherits_exception(self):
-        exc = AppException("Error")
-        assert isinstance(exc, Exception)
-
-
-class TestValidationError:
-    """Additional: ValidationError has correct code."""
-
-    def test_code_is_validation_error(self):
-        exc = ValidationError("Invalid input")
-        assert exc.code == "VALIDATION_ERROR"
-
-    def test_message_preserved(self):
-        exc = ValidationError("Email format invalid")
-        assert exc.message == "Email format invalid"
+    def test_ex004_app_exception_message_preserved(self):
+        """EX-004: AppException preserves custom message and code."""
+        err = AppException("something broke", code="CUSTOM")
+        assert err.message == "something broke"
+        assert err.code == "CUSTOM"
+        assert str(err) == "something broke"

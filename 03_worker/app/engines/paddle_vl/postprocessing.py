@@ -160,10 +160,52 @@ def extract_regions(raw_result: list, page_idx: int) -> Dict[str, Any]:
     # Sort by reading order: top-to-bottom, then left-to-right
     regions.sort(key=lambda r: (r["bbox"][1], r["bbox"][0]))
 
+    # Log intermediate data structure
+    _log_region_breakdown(regions, page_idx)
+
     return {
         "page_number": page_idx + 1,
         "regions": regions,
     }
+
+
+def _log_region_breakdown(regions: list, page_idx: int) -> None:
+    """Log region type counts, confidence stats, and content preview."""
+    type_counts = {}
+    confidences = []
+    for r in regions:
+        t = r.get("type", "?")
+        type_counts[t] = type_counts.get(t, 0) + 1
+        if "confidence" in r:
+            confidences.append(r["confidence"])
+
+    counts_str = ", ".join(f"{v} {k}" for k, v in sorted(type_counts.items()))
+    logger.debug(
+        f"Page {page_idx + 1}: {len(regions)} regions ({counts_str})"
+    )
+
+    if confidences:
+        logger.debug(
+            f"  Confidence: min={min(confidences):.2f} "
+            f"avg={sum(confidences)/len(confidences):.2f} "
+            f"max={max(confidences):.2f}"
+        )
+
+    # Preview first few regions
+    for r in regions[:5]:
+        rtype = r.get("type", "?")
+        bbox = r.get("bbox", [])
+        if rtype in ("text", "title", "list"):
+            content = r.get("content", "")[:80]
+            conf = r.get("confidence", 0)
+            logger.debug(f"  [{rtype}] bbox={bbox} conf={conf:.2f} {content!r}")
+        elif rtype == "table":
+            md_preview = r.get("markdown", "")[:60]
+            logger.debug(f"  [table] bbox={bbox} md={md_preview!r}")
+        elif rtype == "figure":
+            logger.debug(f"  [figure] bbox={bbox}")
+    if len(regions) > 5:
+        logger.debug(f"  ... +{len(regions) - 5} more regions")
 
 
 def extract_regions_from_raw_ocr(raw_ocr: list, page_idx: int) -> Dict[str, Any]:
@@ -227,6 +269,22 @@ def extract_regions_from_raw_ocr(raw_ocr: list, page_idx: int) -> Dict[str, Any]
     # Sort by reading order: top-to-bottom, then left-to-right
     regions.sort(key=lambda r: (r["bbox"][1], r["bbox"][0]))
 
+    if regions:
+        confs = [r["confidence"] for r in regions]
+        logger.debug(
+            f"Page {page_idx + 1} (raw OCR): {len(regions)} text lines, "
+            f"confidence [{min(confs):.2f} - {max(confs):.2f}]"
+        )
+        for r in regions[:3]:
+            logger.debug(
+                f"  bbox={r['bbox']} conf={r['confidence']:.2f} "
+                f"{r['content'][:60]!r}"
+            )
+        if len(regions) > 3:
+            logger.debug(f"  ... +{len(regions) - 3} more lines")
+    else:
+        logger.debug(f"Page {page_idx + 1} (raw OCR): 0 text lines")
+
     return {
         "page_number": page_idx + 1,
         "regions": regions,
@@ -272,35 +330,165 @@ def assess_result_quality(pages: List[Dict[str, Any]]) -> bool:
     return True
 
 
+def _strip_inner_html(text: str) -> str:
+    """Remove HTML tags from cell content, preserving text."""
+    text = re.sub(r'<br\s*/?>', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def _escape_html(text: str) -> str:
+    """Escape HTML special characters in text content."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def html_table_to_markdown(html: str) -> str:
-    """Convert HTML table to Markdown table format."""
-    # Strip wrapper tags if present
+    """Convert HTML table to Markdown table format.
+
+    Handles inner HTML tags in cells, pads rows with uneven column counts.
+    """
     cleaned = _strip_html_wrapper(html)
 
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', cleaned, re.DOTALL)
     if not rows:
         return ""
 
-    md_rows = []
-    for i, row in enumerate(rows):
+    # First pass: determine max column count
+    parsed_rows = []
+    max_cols = 0
+    for row in rows:
         cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
-        cells = [c.strip() for c in cells]
-        if not cells:
-            continue
+        cells = [_strip_inner_html(c) for c in cells]
+        if cells:
+            max_cols = max(max_cols, len(cells))
+            parsed_rows.append(cells)
+
+    if not parsed_rows:
+        return ""
+
+    # Second pass: build markdown with consistent column count
+    md_rows = []
+    for i, cells in enumerate(parsed_rows):
+        while len(cells) < max_cols:
+            cells.append("")
         md_rows.append("| " + " | ".join(cells) + " |")
 
-        # Add separator after header row
         if i == 0:
-            md_rows.append("|" + "|".join(["---"] * len(cells)) + "|")
+            md_rows.append("|" + "|".join(["---"] * max_cols) + "|")
 
     return "\n".join(md_rows)
+
+
+_HTML_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCR Result</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  max-width: 960px; margin: 0 auto; padding: 2rem; line-height: 1.6; color: #333; }}
+h1 {{ font-size: 1.5em; margin: 1.2em 0 0.6em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }}
+table {{ border-collapse: collapse; width: 100%; margin: 1em 0; }}
+th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
+th {{ background-color: #f5f5f5; font-weight: 600; }}
+tr:nth-child(even) {{ background-color: #fafafa; }}
+.page-break {{ border-top: 2px solid #ccc; margin: 2em 0; padding-top: 0.5em; color: #666;
+  font-size: 0.9em; font-weight: 600; }}
+.figure {{ background: #f9f9f9; border: 1px dashed #ccc; padding: 1em;
+  text-align: center; color: #999; margin: 1em 0; }}
+ul {{ margin: 0.5em 0; }}
+p {{ margin: 0.5em 0; }}
+</style>
+</head>
+<body>
+{content}
+</body>
+</html>"""
+
+
+def _format_html(pages: List[Dict[str, Any]]) -> str:
+    """Format structured results as a self-contained HTML document."""
+    parts = []
+
+    for page in pages:
+        if len(pages) > 1:
+            parts.append(
+                f'<div class="page-break">Page {page["page_number"]}</div>'
+            )
+
+        for region in page["regions"]:
+            rtype = region["type"]
+
+            if rtype == "title":
+                content = _escape_html(region.get("content", ""))
+                parts.append(f"<h1>{content}</h1>")
+
+            elif rtype == "table":
+                html = region.get("html", "")
+                if html:
+                    parts.append(html)
+                else:
+                    md = region.get("markdown", "")
+                    parts.append(f"<pre>{_escape_html(md)}</pre>")
+
+            elif rtype == "list":
+                content = region.get("content", "")
+                parts.append("<ul>")
+                parts.append(f"  <li>{_escape_html(content)}</li>")
+                parts.append("</ul>")
+
+            elif rtype == "text":
+                content = _escape_html(region.get("content", ""))
+                parts.append(f"<p>{content}</p>")
+
+            elif rtype == "figure":
+                parts.append('<div class="figure">[Figure]</div>')
+
+    content = "\n".join(parts)
+    return _HTML_TEMPLATE.format(content=content)
+
+
+def _format_markdown(pages: List[Dict[str, Any]]) -> str:
+    """Format structured results as Markdown document."""
+    parts = []
+
+    for page in pages:
+        if len(pages) > 1:
+            parts.append(f"\n---\n\n## Page {page['page_number']}\n")
+
+        for region in page["regions"]:
+            rtype = region["type"]
+
+            if rtype == "title":
+                parts.append(f"\n# {region['content']}\n")
+            elif rtype == "table":
+                md = region.get("markdown", "")
+                if md:
+                    parts.append(f"\n{md}\n")
+            elif rtype == "list":
+                parts.append(f"- {region['content']}")
+            elif rtype == "text":
+                parts.append(f"\n{region['content']}\n")
+            elif rtype == "figure":
+                parts.append("\n*[Figure]*\n")
+
+    result = "\n".join(parts).strip()
+    return result + "\n" if result else ""
 
 
 def format_structured_output(
     pages: List[Dict[str, Any]],
     output_format: str,
 ) -> bytes:
-    """Format structured results as JSON, Markdown, or plain text."""
+    """Format structured results as JSON, Markdown, HTML, or plain text."""
 
     if output_format == "json":
         total_regions = sum(len(p["regions"]) for p in pages)
@@ -323,24 +511,10 @@ def format_structured_output(
         return json.dumps(output, ensure_ascii=False, indent=2).encode("utf-8")
 
     elif output_format == "md":
-        md_parts = []
-        for page in pages:
-            if len(pages) > 1:
-                md_parts.append(f"---\n**Page {page['page_number']}**\n")
+        return _format_markdown(pages).encode("utf-8")
 
-            for region in page["regions"]:
-                if region["type"] == "title":
-                    md_parts.append(f"# {region['content']}\n")
-                elif region["type"] == "table":
-                    md_parts.append(region.get("markdown", "") + "\n")
-                elif region["type"] == "list":
-                    md_parts.append(f"- {region['content']}\n")
-                elif region["type"] == "text":
-                    md_parts.append(region["content"] + "\n")
-                elif region["type"] == "figure":
-                    md_parts.append("[Figure]\n")
-
-        return "\n".join(md_parts).encode("utf-8")
+    elif output_format == "html":
+        return _format_html(pages).encode("utf-8")
 
     else:
         # Fallback: plain text

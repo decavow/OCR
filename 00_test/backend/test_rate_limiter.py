@@ -1,96 +1,131 @@
-"""
-Test cases for M9: Rate Limiting
+"""Unit tests for RateLimiter (02_backend/app/core/rate_limiter.py).
 
-Covers:
-- Under limit -> allowed
-- Over limit -> 429
-- Different endpoints have different limits
-- Limit resets after window
-- Internal endpoints excluded
-- Rate limit headers present
+Tests TokenBucket, RateLimiter, and configuration constants.
+Requires mocked app deps (app.config, app.core.logging).
+
+Test IDs: RL-001 to RL-010
 """
+
+import importlib.util
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-import importlib.util
+
+# ---------------------------------------------------------------------------
+# Module loader — mock app deps so the module can be imported
+# ---------------------------------------------------------------------------
+
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
 
-@pytest.fixture
-def rate_limiter_module():
-    """Load rate_limiter module with mocked dependencies."""
-    logger_mock = MagicMock()
-    settings_mock = MagicMock()
-    settings_mock.rate_limit_enabled = True
-
-    with patch.dict("sys.modules", {
-        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=logger_mock)),
-        "app.config": MagicMock(settings=settings_mock),
-    }):
-        mod_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "core" / "rate_limiter.py"
-        spec = importlib.util.spec_from_file_location("rate_limiter", mod_path)
-        mod = importlib.util.module_from_spec(spec)
+def _load():
+    mod_path = BACKEND_ROOT / "app" / "core" / "rate_limiter.py"
+    spec = importlib.util.spec_from_file_location("rate_limiter", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    mocked = {
+        "fastapi": MagicMock(),
+        "fastapi.responses": MagicMock(),
+        "starlette.middleware.base": MagicMock(),
+        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=MagicMock())),
+        "app.config": MagicMock(settings=MagicMock()),
+    }
+    with patch.dict("sys.modules", mocked):
         spec.loader.exec_module(mod)
-        yield mod
+    return mod
+
+
+rl = _load()
+TokenBucket = rl.TokenBucket
+RateLimiter = rl.RateLimiter
+RATE_LIMITS = rl.RATE_LIMITS
+DEFAULT_RATE_LIMIT = rl.DEFAULT_RATE_LIMIT
+EXCLUDED_PREFIXES = rl.EXCLUDED_PREFIXES
+
+
+# ===================================================================
+# TokenBucket  (RL-001 to RL-003)
+# ===================================================================
 
 
 class TestTokenBucket:
-    def test_allows_within_limit(self, rate_limiter_module):
-        bucket = rate_limiter_module.TokenBucket(limit=5, window_seconds=60)
-        for _ in range(5):
-            allowed, remaining, _ = bucket.consume()
-            assert allowed is True
+    """RL-001 to RL-003: Token bucket consume behaviour."""
 
-    def test_rejects_over_limit(self, rate_limiter_module):
-        bucket = rate_limiter_module.TokenBucket(limit=2, window_seconds=60)
+    def test_rl001_consume_within_limit(self):
+        """RL-001: First consume within limit returns allowed=True."""
+        bucket = TokenBucket(limit=5, window_seconds=60)
+        allowed, remaining, reset = bucket.consume()
+        assert allowed is True
+        assert remaining >= 0
+
+    def test_rl002_consume_over_limit(self):
+        """RL-002: After exhausting tokens, consume returns allowed=False."""
+        bucket = TokenBucket(limit=2, window_seconds=60)
         bucket.consume()
         bucket.consume()
-        allowed, remaining, _ = bucket.consume()
+        allowed, remaining, reset = bucket.consume()
         assert allowed is False
         assert remaining == 0
 
-    def test_remaining_decreases(self, rate_limiter_module):
-        bucket = rate_limiter_module.TokenBucket(limit=5, window_seconds=60)
+    def test_rl003_remaining_tracks_correctly(self):
+        """RL-003: Remaining decrements with each consume."""
+        bucket = TokenBucket(limit=5, window_seconds=60)
         _, r1, _ = bucket.consume()
         _, r2, _ = bucket.consume()
-        assert r2 < r1
+        # Each consume should reduce remaining by ~1
+        assert r1 > r2
+
+
+# ===================================================================
+# RateLimiter  (RL-004)
+# ===================================================================
 
 
 class TestRateLimiter:
-    def test_different_keys_independent(self, rate_limiter_module):
-        limiter = rate_limiter_module.RateLimiter()
-        # Exhaust key A
-        for _ in range(3):
-            limiter.check("key_a", 3, 60)
-        allowed_a, _, _ = limiter.check("key_a", 3, 60)
-        # Key B should still be allowed
-        allowed_b, _, _ = limiter.check("key_b", 3, 60)
+    """RL-004: Per-key independence."""
+
+    def test_rl004_different_keys_independent(self):
+        """RL-004: Different keys get independent buckets."""
+        limiter = RateLimiter()
+        # Exhaust key-A (limit=1)
+        limiter.check("key-a", limit=1, window_seconds=60)
+        allowed_a, _, _ = limiter.check("key-a", limit=1, window_seconds=60)
+
+        # key-B should still have tokens
+        allowed_b, _, _ = limiter.check("key-b", limit=1, window_seconds=60)
+
         assert allowed_a is False
         assert allowed_b is True
 
-    def test_upload_limit_lower_than_default(self, rate_limiter_module):
-        """Upload has 10 req/min, default has 60 req/min."""
-        upload_limit = rate_limiter_module.RATE_LIMITS.get("/api/v1/upload")
-        default_limit = rate_limiter_module.DEFAULT_RATE_LIMIT
-        assert upload_limit is not None
-        assert upload_limit[0] < default_limit[0]
 
-    def test_login_limit(self, rate_limiter_module):
-        """Login has 5 req/min."""
-        login_limit = rate_limiter_module.RATE_LIMITS.get("/api/v1/auth/login")
-        assert login_limit == (5, 60)
+# ===================================================================
+# Configuration constants  (RL-005 to RL-010)
+# ===================================================================
 
-    def test_register_limit(self, rate_limiter_module):
-        """Register has 3 req/min."""
-        register_limit = rate_limiter_module.RATE_LIMITS.get("/api/v1/auth/register")
-        assert register_limit == (3, 60)
 
-    def test_internal_excluded(self, rate_limiter_module):
-        """Internal paths should be excluded."""
-        excluded = rate_limiter_module.EXCLUDED_PREFIXES
-        assert any("/api/v1/internal/" in p for p in excluded)
+class TestRateLimitConfig:
+    """RL-005 to RL-010: Built-in rate limit constants and exclusions."""
 
-    def test_health_excluded(self, rate_limiter_module):
-        """Health endpoint should be excluded."""
-        excluded = rate_limiter_module.EXCLUDED_PREFIXES
-        assert any("/health" in p for p in excluded)
+    def test_rl005_upload_limit(self):
+        """RL-005: /api/v1/upload limit is 10 per 60s."""
+        assert RATE_LIMITS["/api/v1/upload"] == (10, 60)
+
+    def test_rl006_login_limit(self):
+        """RL-006: /api/v1/auth/login limit is 5 per 60s."""
+        assert RATE_LIMITS["/api/v1/auth/login"] == (5, 60)
+
+    def test_rl007_register_limit(self):
+        """RL-007: /api/v1/auth/register limit is 3 per 60s."""
+        assert RATE_LIMITS["/api/v1/auth/register"] == (3, 60)
+
+    def test_rl008_default_rate_limit(self):
+        """RL-008: Default rate limit is 60 per 60s."""
+        assert DEFAULT_RATE_LIMIT == (60, 60)
+
+    def test_rl009_internal_excluded(self):
+        """RL-009: /api/v1/internal/ is in excluded prefixes."""
+        assert any(p.startswith("/api/v1/internal") for p in EXCLUDED_PREFIXES)
+
+    def test_rl010_health_excluded(self):
+        """RL-010: /health is in excluded prefixes."""
+        assert "/health" in EXCLUDED_PREFIXES

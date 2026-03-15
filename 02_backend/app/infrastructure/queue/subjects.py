@@ -5,7 +5,7 @@ def get_subject(method: str, tier: int) -> str:
     """Get subject for job routing.
 
     Format: ocr.{method}.tier{tier}
-    Example: ocr.ocr_text_raw.tier0
+    Example: ocr.ocr_paddle_text.tier0
     """
     return f"ocr.{method}.tier{tier}"
 

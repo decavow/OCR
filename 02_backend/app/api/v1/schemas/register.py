@@ -10,7 +10,7 @@ class ServiceRegistrationRequest(BaseModel):
     instance_id: str            # e.g., "ocr-text-tier0-abc123"
     display_name: str = ""      # e.g., "Vietnamese Text OCR"
     description: Optional[str] = None
-    allowed_methods: List[str] = ["ocr_text_raw"]
+    allowed_methods: List[str] = ["ocr_paddle_text"]
     allowed_tiers: List[int] = [0]
     supported_output_formats: List[str] = ["txt", "json"]
     engine_info: Optional[Dict[str, Any]] = None  # {name, version, capabilities}

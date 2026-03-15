@@ -65,13 +65,16 @@ class FileProxyService:
         job, file = check_job_file_acl(self.db, job_id, file_id, service_type)
 
         # Generate result key
-        # Get request for user_id and output_format
+        # Get request for user_id, output_format, and context for path
         request = job.request
         result_key = generate_result_key(
             user_id=request.user_id,
             request_id=request.id,
             file_id=file_id,
             output_format=request.output_format,
+            original_name=file.original_name,
+            method=request.method,
+            created_at=request.created_at,
         )
 
         # Store in MinIO results bucket

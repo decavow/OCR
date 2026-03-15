@@ -1,151 +1,221 @@
-"""
-Test cases for M4: HeartbeatMonitor + Stalled Job Recovery
+"""Unit tests for HeartbeatMonitor (02_backend/app/modules/job/heartbeat_monitor.py).
 
-Covers:
-- Detect stale workers
-- Detect stalled jobs on dead workers
-- Recovery requeues jobs via RetryOrchestrator
-- Cleanup old heartbeats
-- No false positives (active workers not flagged)
+Service-layer tests with mocked repositories and retry orchestrator.
+
+Test IDs: HB-001 to HB-010
 """
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from types import SimpleNamespace
-from pathlib import Path
-import importlib.util
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
+TEST_DIR = Path(__file__).parent
+
+sys.path.insert(0, str(TEST_DIR))
+from conftest import make_job
+sys.path.pop(0)
+
+
+# ---------------------------------------------------------------------------
+# Load HeartbeatMonitor module
+# ---------------------------------------------------------------------------
+
+def _load_heartbeat_monitor():
+    mod_path = BACKEND_ROOT / "app" / "modules" / "job" / "heartbeat_monitor.py"
+    spec = importlib.util.spec_from_file_location("heartbeat_monitor", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+
+    mocked = {
+        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=MagicMock())),
+        "app.config": MagicMock(settings=MagicMock()),
+        "app.infrastructure.database.models": MagicMock(),
+        "app.infrastructure.database.repositories": MagicMock(),
+        "sqlalchemy": MagicMock(),
+        "sqlalchemy.orm": MagicMock(),
+    }
+    with patch.dict("sys.modules", mocked):
+        spec.loader.exec_module(mod)
+    return mod
+
+
+hb_mod = _load_heartbeat_monitor()
+HeartbeatMonitor = hb_mod.HeartbeatMonitor
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+def _make_instance(instance_id="worker-1"):
+    return SimpleNamespace(id=instance_id)
 
 
 @pytest.fixture
-def monitor_class():
-    logger_mock = MagicMock()
-    mocked_modules = {
-        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=logger_mock)),
-        "app.infrastructure.database.models": MagicMock(),
-        "app.infrastructure.database.repositories": MagicMock(),
-    }
-    with patch.dict("sys.modules", mocked_modules):
-        mod_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "modules" / "job" / "heartbeat_monitor.py"
-        spec = importlib.util.spec_from_file_location("heartbeat_monitor", mod_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        yield mod.HeartbeatMonitor
+def monitor():
+    """Create HeartbeatMonitor with all repos and orchestrator mocked."""
+    db = MagicMock()
+    retry_orch = AsyncMock()
+    m = HeartbeatMonitor(db, retry_orchestrator=retry_orch)
+    m.instance_repo = MagicMock()
+    m.heartbeat_repo = MagicMock()
+    m.job_repo = MagicMock()
+    return m
 
 
-def make_instance(instance_id, status="ACTIVE"):
-    return SimpleNamespace(id=instance_id, status=status)
+@pytest.fixture
+def monitor_no_orch():
+    """Create HeartbeatMonitor without retry orchestrator."""
+    db = MagicMock()
+    m = HeartbeatMonitor(db, retry_orchestrator=None)
+    m.instance_repo = MagicMock()
+    m.heartbeat_repo = MagicMock()
+    m.job_repo = MagicMock()
+    return m
 
 
-def make_job(job_id, status="PROCESSING", worker_id="w1"):
-    return SimpleNamespace(id=job_id, status=status, worker_id=worker_id)
-
+# ===================================================================
+# check_workers  (HB-001 to HB-002)
+# ===================================================================
 
 class TestCheckWorkers:
-    @pytest.mark.asyncio
-    async def test_marks_stale_workers_dead(self, monitor_class):
-        mon = monitor_class(db=MagicMock())
-        stale_instances = [make_instance("w1"), make_instance("w2")]
-        mon.instance_repo.get_stale_instances = MagicMock(return_value=stale_instances)
-        mon.instance_repo.mark_dead = MagicMock()
-
-        dead_ids = await mon.check_workers()
-        assert dead_ids == ["w1", "w2"]
-        assert mon.instance_repo.mark_dead.call_count == 2
+    """HB-001 to HB-002: Find dead workers."""
 
     @pytest.mark.asyncio
-    async def test_no_stale_workers(self, monitor_class):
-        mon = monitor_class(db=MagicMock())
-        mon.instance_repo.get_stale_instances = MagicMock(return_value=[])
+    async def test_hb001_returns_dead_worker_ids(self, monitor):
+        """HB-001: Returns list of dead worker IDs from stale instances."""
+        stale = [_make_instance("worker-1"), _make_instance("worker-2")]
+        monitor.instance_repo.get_stale_instances.return_value = stale
 
-        dead_ids = await mon.check_workers()
-        assert dead_ids == []
+        result = await monitor.check_workers()
+        assert result == ["worker-1", "worker-2"]
+        assert monitor.instance_repo.mark_dead.call_count == 2
 
+    @pytest.mark.asyncio
+    async def test_hb002_returns_empty_when_no_stale(self, monitor):
+        """HB-002: Returns empty list when no stale instances."""
+        monitor.instance_repo.get_stale_instances.return_value = []
+
+        result = await monitor.check_workers()
+        assert result == []
+        monitor.instance_repo.mark_dead.assert_not_called()
+
+
+# ===================================================================
+# detect_stalled  (HB-003 to HB-005)
+# ===================================================================
 
 class TestDetectStalled:
-    @pytest.mark.asyncio
-    async def test_finds_processing_jobs_on_dead_workers(self, monitor_class):
-        mon = monitor_class(db=MagicMock())
-        stale = [make_instance("w1")]
-        jobs_on_w1 = [make_job("j1", worker_id="w1"), make_job("j2", worker_id="w1")]
-
-        mon.instance_repo.get_stale_instances = MagicMock(return_value=stale)
-        mon.instance_repo.mark_dead = MagicMock()
-        mon.job_repo.get_processing_by_worker = MagicMock(return_value=jobs_on_w1)
-
-        stalled = await mon.detect_stalled()
-        assert len(stalled) == 2
+    """HB-003 to HB-005: Find PROCESSING jobs on dead workers."""
 
     @pytest.mark.asyncio
-    async def test_no_stalled_when_no_dead_workers(self, monitor_class):
-        mon = monitor_class(db=MagicMock())
-        mon.instance_repo.get_stale_instances = MagicMock(return_value=[])
+    async def test_hb003_returns_stalled_jobs(self, monitor):
+        """HB-003: Returns PROCESSING jobs from dead workers."""
+        stale = [_make_instance("worker-1")]
+        monitor.instance_repo.get_stale_instances.return_value = stale
+        stalled_jobs = [make_job(job_id="j1", worker_id="worker-1")]
+        monitor.job_repo.get_processing_by_worker.return_value = stalled_jobs
 
-        stalled = await mon.detect_stalled()
-        assert stalled == []
+        result = await monitor.detect_stalled()
+        assert len(result) == 1
+        assert result[0].id == "j1"
 
+    @pytest.mark.asyncio
+    async def test_hb004_returns_empty_when_no_dead_workers(self, monitor):
+        """HB-004: Returns empty list when no dead workers found."""
+        monitor.instance_repo.get_stale_instances.return_value = []
+
+        result = await monitor.detect_stalled()
+        assert result == []
+        monitor.job_repo.get_processing_by_worker.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hb005_aggregates_jobs_from_multiple_dead_workers(self, monitor):
+        """HB-005: Aggregates stalled jobs from multiple dead workers."""
+        stale = [_make_instance("worker-1"), _make_instance("worker-2")]
+        monitor.instance_repo.get_stale_instances.return_value = stale
+        monitor.job_repo.get_processing_by_worker.side_effect = [
+            [make_job(job_id="j1", worker_id="worker-1")],
+            [make_job(job_id="j2", worker_id="worker-2"), make_job(job_id="j3", worker_id="worker-2")],
+        ]
+
+        result = await monitor.detect_stalled()
+        assert len(result) == 3
+
+
+# ===================================================================
+# recover_stalled_jobs  (HB-006 to HB-008)
+# ===================================================================
 
 class TestRecoverStalledJobs:
-    @pytest.mark.asyncio
-    async def test_recovery_calls_retry_orchestrator(self, monitor_class):
-        orchestrator = MagicMock()
-        orchestrator.handle_failure = AsyncMock()
-
-        mon = monitor_class(db=MagicMock(), retry_orchestrator=orchestrator)
-        jobs = [make_job("j1"), make_job("j2")]
-
-        await mon.recover_stalled_jobs(jobs)
-
-        assert orchestrator.handle_failure.call_count == 2
-        # Verify called with retriable=True
-        for call in orchestrator.handle_failure.call_args_list:
-            assert call.kwargs.get("retriable", call.args[2] if len(call.args) > 2 else None) is True
+    """HB-006 to HB-008: Requeue stalled jobs via orchestrator."""
 
     @pytest.mark.asyncio
-    async def test_recovery_without_orchestrator_no_error(self, monitor_class):
-        mon = monitor_class(db=MagicMock(), retry_orchestrator=None)
-        jobs = [make_job("j1")]
+    async def test_hb006_calls_orchestrator_for_each_job(self, monitor):
+        """HB-006: Calls retry_orchestrator.handle_failure for each stalled job."""
+        jobs = [make_job(job_id="j1"), make_job(job_id="j2")]
+
+        await monitor.recover_stalled_jobs(jobs)
+        assert monitor.retry_orchestrator.handle_failure.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_hb007_does_nothing_without_orchestrator(self, monitor_no_orch):
+        """HB-007: Does nothing when retry_orchestrator is None."""
+        jobs = [make_job(job_id="j1")]
 
         # Should not raise
-        await mon.recover_stalled_jobs(jobs)
+        await monitor_no_orch.recover_stalled_jobs(jobs)
 
     @pytest.mark.asyncio
-    async def test_recovery_handles_individual_failure(self, monitor_class):
-        orchestrator = MagicMock()
-        orchestrator.handle_failure = AsyncMock(side_effect=[None, Exception("queue error")])
+    async def test_hb008_continues_on_single_job_failure(self, monitor):
+        """HB-008: Continues processing other jobs if one fails."""
+        jobs = [make_job(job_id="j1"), make_job(job_id="j2"), make_job(job_id="j3")]
+        # First call raises, second and third succeed
+        monitor.retry_orchestrator.handle_failure.side_effect = [
+            Exception("orchestrator error"),
+            None,
+            None,
+        ]
 
-        mon = monitor_class(db=MagicMock(), retry_orchestrator=orchestrator)
-        jobs = [make_job("j1"), make_job("j2")]
+        await monitor.recover_stalled_jobs(jobs)
+        # All three jobs should have been attempted
+        assert monitor.retry_orchestrator.handle_failure.await_count == 3
 
-        # Should not raise even if one job fails
-        await mon.recover_stalled_jobs(jobs)
-        assert orchestrator.handle_failure.call_count == 2
 
+# ===================================================================
+# run_check  (HB-009 to HB-010)
+# ===================================================================
 
 class TestRunCheck:
+    """HB-009 to HB-010: Full check cycle."""
+
     @pytest.mark.asyncio
-    async def test_full_cycle_with_stalled_jobs(self, monitor_class):
-        orchestrator = MagicMock()
-        orchestrator.handle_failure = AsyncMock()
+    async def test_hb009_returns_summary_with_recoveries(self, monitor):
+        """HB-009: Returns summary dict with stalled_recovered and heartbeats_cleaned."""
+        stale = [_make_instance("worker-1")]
+        monitor.instance_repo.get_stale_instances.return_value = stale
+        stalled_jobs = [make_job(job_id="j1"), make_job(job_id="j2")]
+        monitor.job_repo.get_processing_by_worker.return_value = stalled_jobs
+        monitor.heartbeat_repo.cleanup_old.return_value = 5
 
-        mon = monitor_class(db=MagicMock(), retry_orchestrator=orchestrator)
-        stale = [make_instance("w1")]
-        stalled_jobs = [make_job("j1")]
-
-        mon.instance_repo.get_stale_instances = MagicMock(return_value=stale)
-        mon.instance_repo.mark_dead = MagicMock()
-        mon.job_repo.get_processing_by_worker = MagicMock(return_value=stalled_jobs)
-        mon.heartbeat_repo.cleanup_old = MagicMock(return_value=5)
-
-        result = await mon.run_check()
-        assert result["stalled_recovered"] == 1
+        result = await monitor.run_check()
+        assert result["stalled_recovered"] == 2
         assert result["heartbeats_cleaned"] == 5
 
     @pytest.mark.asyncio
-    async def test_full_cycle_no_issues(self, monitor_class):
-        mon = monitor_class(db=MagicMock())
-        mon.instance_repo.get_stale_instances = MagicMock(return_value=[])
-        mon.heartbeat_repo.cleanup_old = MagicMock(return_value=0)
+    async def test_hb010_returns_zeros_when_nothing_to_do(self, monitor):
+        """HB-010: Returns zeros when no stalled jobs and no old heartbeats."""
+        monitor.instance_repo.get_stale_instances.return_value = []
+        monitor.heartbeat_repo.cleanup_old.return_value = 0
 
-        result = await mon.run_check()
+        result = await monitor.run_check()
         assert result["stalled_recovered"] == 0
         assert result["heartbeats_cleaned"] == 0

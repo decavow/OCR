@@ -52,7 +52,7 @@ async def upload_files(
     files: List[UploadFile] = File(...),
     output_format: str = Form("txt"),
     retention_hours: int = Form(168),
-    method: str = Form("ocr_text_raw"),
+    method: str = Form("ocr_paddle_text"),
     tier: int = Form(0),
     db: Session = Depends(get_db),
     storage=Depends(get_storage),

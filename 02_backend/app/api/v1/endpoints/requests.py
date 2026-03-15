@@ -39,7 +39,7 @@ async def get_requests(
     page: int = 1,
     page_size: int = 20,
     status: Optional[str] = Query(None, description="Filter by status (PROCESSING, COMPLETED, FAILED, etc.)"),
-    method: Optional[str] = Query(None, description="Filter by OCR method (ocr_text_raw, ocr_table, etc.)"),
+    method: Optional[str] = Query(None, description="Filter by OCR method (ocr_paddle_text, ocr_tesseract_text, etc.)"),
     date_from: Optional[datetime] = Query(None, description="Filter by created_at >= date_from (ISO 8601)"),
     date_to: Optional[datetime] = Query(None, description="Filter by created_at <= date_to (ISO 8601)"),
     db: Session = Depends(get_db),

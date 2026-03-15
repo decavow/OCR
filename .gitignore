@@ -1,7 +1,6 @@
 # === Environment ===
 **/.env
 **/.env.*
-**/*env*
 !**/.env.example
 
 # === Python ===
@@ -17,19 +16,21 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-nul
 
 # === Node.js ===
 node_modules/
 
 # === Frontend build ===
-frontend/dist/
+01_frontend/dist/
 
-# === Data (runtime volumes) ===
+# === Data (runtime volumes, logs, uploads) ===
 data/
 
-# === Database ===
+# === Database (SQLite WAL mode) ===
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.sqlite3
 
 # === IDE ===
@@ -43,29 +44,35 @@ data/
 Thumbs.db
 nul
 
-# === Docker ===
+# === Logs ===
 *.log
+
+# === Coverage ===
+.coverage
+htmlcov/
+coverage.xml
+
+# === Worker temp dirs ===
+/tmp/ocr_worker_*/
 
 # === Claude Code ===
 .claude/settings.local.json
+.claude/skills/
 
 # === Test data (binary files: PDF, images) ===
 05_test_cases/data_test/
 
-# === Stray lock files ===
+# === Lock files ===
 /package-lock.json
 
 # === Project-specific ===
 collection_tool.py
 ocr.md
 ocr_structure.md
-fe_template
-stitch_ocr_dashboard_upload
-**env
+fe_template/
+stitch_ocr_dashboard_upload/
 01_frontend/ocr-platform-mvp-1.zip
-claude
-
+claude/
+Model_testing/
 **_content.md
 **structure.md
-
-Model_testing/

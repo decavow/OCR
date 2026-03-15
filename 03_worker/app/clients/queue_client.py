@@ -49,7 +49,7 @@ class QueueClient:
         consumer_name = settings.worker_service_type.replace("-", "_")
 
         # Create pull subscription with filter
-        # filter_subject: e.g., "ocr.ocr_text_raw.tier0"
+        # filter_subject: e.g., "ocr.ocr_paddle_text.tier0"
         logger.info(f"Subscribing to {settings.worker_filter_subject} with consumer {consumer_name}")
 
         self.subscription = await self.js.pull_subscribe(

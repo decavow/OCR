@@ -15,7 +15,7 @@
 
 | Hoàn thành | Một phần | Stub | Chưa bắt đầu |
 |:---:|:---:|:---:|:---:|
-| **31** | **4** | **5** | **16** |
+| **40** | **3** | **0** | **13** |
 
 ### 1.1 Kiến trúc & Hạ tầng
 
@@ -34,7 +34,7 @@
 | Register / Login / Logout / Me | ✅ Done | bcrypt + session token, 4 endpoint hoàn chỉnh |
 | Admin CLI (create-admin, promote, demote) | ✅ Done | app/cli.py |
 | Admin Dashboard API (stats, users, requests) | ✅ Done | 5 endpoint thống kê hệ thống |
-| Rate Limiting | ❌ Chưa | Không có middleware giới hạn request |
+| Rate Limiting | ✅ Done | M9: core/rate_limiter.py — sliding window per IP |
 | API Key cho Integration | ❌ Chưa | Chỉ có session token, chưa có API key |
 | Refresh Token / Token Rotation | ❌ Chưa | Session cố định, không refresh |
 
@@ -66,10 +66,10 @@
 |---|:---:|---|
 | Job Status Update (PATCH) | ✅ Done | Worker → Backend via X-Access-Key |
 | File Proxy Download/Upload | ✅ Done | Access control + ACL check |
-| Retry Logic | ⚠️ Stub | RetryOrchestrator: tất cả method = `pass` |
-| Stalled Job Recovery | ⚠️ Stub | HeartbeatMonitor.detect_stalled() = `pass` |
-| Request Status Aggregation | ⚠️ Stub | JobStateMachine.get_request_status() = `pass` |
-| Dead Letter Queue | ⚠️ Stub | DLQ stream tạo sẵn, chưa có logic đẩy vào |
+| Retry Logic | ✅ Done | M3: RetryOrchestrator — auto requeue + backoff |
+| Stalled Job Recovery | ✅ Done | M4: HeartbeatMonitor.detect_stalled() — scheduler-driven |
+| Request Status Aggregation | ✅ Done | M1: JobStateMachine.get_request_status() — aggregate logic |
+| Dead Letter Queue | ✅ Done | M3: DLQ stream + routing logic |
 
 ### 1.6 Frontend (React + Vite + Tailwind + Shadcn/UI)
 
@@ -100,7 +100,7 @@
 | Database Model & Repository Tests | ✅ Done | 00_test/infras/test_database.py — full CRUD flow |
 | Storage Client Tests | ✅ Done | 00_test/infras/test_storage.py — MinIO operations |
 | Test Runner (run all) | ✅ Done | 00_test/run_all_tests.py |
-| CI/CD Pipeline | ❌ Chưa | Tests chạy manual, chưa có GitHub Actions |
+| CI/CD Pipeline | ✅ Done | M12: .github/workflows/ci.yml — GitHub Actions |
 
 ### 1.8 Document Management
 
@@ -108,7 +108,7 @@
 |---|:---:|---|
 | Folder / Workspace | ❌ Chưa | Không có model Workspace/Folder |
 | Full-text Search / Indexing | ❌ Chưa | Không có search engine |
-| Retention Policy Enforcement | ◐ Một phần | Trường retention_hours có nhưng không có cron job dọn dẹp |
+| Retention Policy Enforcement | ✅ Done | M8: CleanupService — scheduler cron job dọn dẹp expired files |
 | Version History | ❌ Chưa | — |
 | Tag / Label / Category | ❌ Chưa | — |
 
@@ -128,7 +128,7 @@
 |---|:---:|---|
 | RBAC (Role-Based Access) | ◐ Một phần | Chỉ có is_admin boolean, frontend đã phân quyền admin/user |
 | SSO / SAML / OAuth2 | ❌ Chưa | — |
-| Audit Trail | ❌ Chưa | Không có bảng audit_logs |
+| Audit Trail | ✅ Done | AuditLog model + admin dashboard endpoint |
 | Multi-tenant Isolation | ❌ Chưa | Tất cả dùng chung DB + bucket |
 | Encryption at Rest | ❌ Chưa | MinIO không config encryption |
 
@@ -139,14 +139,14 @@
 | Quota / Usage Tracking | ❌ Chưa | Không có bảng quota hay usage |
 | Webhook / Event Notification | ❌ Chưa | — |
 | Prometheus Metrics | ❌ Chưa | — |
-| Real Health Check | ◐ Một phần | Trả hardcoded "ok", chưa check thực tế |
+| Real Health Check | ✅ Done | M7: HealthService — kiểm tra DB, NATS, MinIO thực tế |
 | Billing / Pay-as-you-go | ❌ Chưa | Frontend có cost estimation UI nhưng backend chưa có billing logic |
 
 ### Tổng kết tiến độ
 
-**Hoàn thành: ~63%** (bao gồm Done + Partial) | **Tổng: 56 hạng mục**
+**Phase 1 — Production Hardening: 100% HOÀN THÀNH** (2026-03-07) | **Tổng: 56 hạng mục**
 
-So với phiên bản POC ban đầu (chỉ backend + worker), repo hiện tại đã bổ sung đáng kể: frontend MVP hoàn chỉnh với 12+ pages/components, admin dashboard với charts, và test suite bao phủ infrastructure + API + worker.
+Phase 1 đã hoàn thành toàn bộ 11 modules qua 4 sprints: StateMachine, JobService, Retry+DLQ, HeartbeatMonitor, Scheduler, StatusIntegration, Health, RetentionCleanup, RateLimit, Frontend Error UX, CI/CD. Tất cả stubs đã được implement đầy đủ. Ngoài ra còn bổ sung AuditLog model + admin audit dashboard.
 
 ---
 
@@ -157,12 +157,12 @@ So với phiên bản POC ban đầu (chỉ backend + worker), repo hiện tại
 | **Core Extraction: OCR → IDP** | Có OCR text + PPStructure layout | Chưa có template engine, key-value extraction | **Cao** | Lớn |
 | **Độ chính xác Tiếng Việt** | PaddleOCR + Tesseract hỗ trợ Vietnamese | Chưa fine-tune cho CCCD, hóa đơn VN, chữ viết tay | **Cao** | Rất lớn |
 | **Human-in-the-loop** | Không có | Thiếu hoàn toàn: correction UI, feedback, fine-tune | Trung bình | Rất lớn |
-| **Document Management** | File trong MinIO theo user/request | Không có folder, search, auto-cleanup, preview | **Cao** | Lớn |
+| **Document Management** | File trong MinIO theo user/request + auto-cleanup | Không có folder, search, preview | **Cao** | Lớn |
 | **Workflow Automation** | Không có | Thiếu: rule engine, webhook, integration API | Trung bình | Lớn |
-| **Backend Orchestration** | 4 stub methods (pass) | Job fail không retry, request status không aggregate | **Rất cao** | Trung bình |
-| **RBAC + SSO + Audit Trail** | is_admin flag + frontend phân quyền | Cần role model, SAML/OIDC, audit_logs | **Cao** | Lớn |
+| ~~**Backend Orchestration**~~ | ~~4 stub methods~~ | ✅ **DONE** — Retry, Recovery, Status Aggregation, DLQ hoàn thành | — | — |
+| **RBAC + SSO** | is_admin flag + frontend phân quyền + audit trail | Cần role model, SAML/OIDC | **Cao** | Lớn |
 | **Multi-tenant + Billing** | Single tenant, FE có cost estimation | Cần tenant isolation, metering, payment | Trung bình | Rất lớn |
-| **Observability** | Hardcoded health check, JSON logging | Cần Prometheus, tracing, alerting | **Cao** | Trung bình |
+| **Observability** | Real health check (DB/NATS/MinIO), JSON logging | Cần Prometheus, tracing, alerting | **Cao** | Trung bình |
 
 ---
 
@@ -234,15 +234,15 @@ So với phiên bản POC ban đầu (chỉ backend + worker), repo hiện tại
 
 ---
 
-## 5. Top 5 Ưu Tiên Ngay Lập Tức
+## 5. Top 5 Ưu Tiên Tiếp Theo (Phase 2)
 
 | # | Hành động | Lý do |
 |:---:|---|---|
-| **1** | Hoàn thiện Retry/Recovery/Status Aggregation | 4 stub methods là blocker cho production |
-| **2** | Rate limiting & Security hardening | Cần trước khi mở cho user thực |
-| **3** | Real health check + Retention cleanup | Health hardcoded "ok", file hết hạn không dọn |
-| **4** | CI/CD pipeline | Test suite có nhưng không chạy tự động |
-| **5** | Vietnamese OCR benchmark | Cần biết accuracy trước khi invest template engine |
+| **1** | Vietnamese OCR benchmark (CCCD, hóa đơn) | Cần biết accuracy trước khi invest template engine |
+| **2** | Template Engine + Key-Value Extraction | Core IDP value proposition — chuyển từ OCR sang structured data |
+| **3** | Table Enhancement → CSV/Excel export | PPStructure có layout nhưng chưa export CSV |
+| **4** | Confidence-based routing + quality dashboard | Worker trả confidence nhưng chưa có rule engine |
+| **5** | Frontend: structured_extract method + output format md | PaddleVL đã hỗ trợ, frontend cần hiển thị |
 
 ---
 

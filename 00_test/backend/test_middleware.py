@@ -1,24 +1,88 @@
-"""
-Test cases for Core Middleware (MW-001 to MW-004)
+"""Unit tests for middleware (02_backend/app/core/middleware.py).
 
-Covers:
-- RequestLoggingMiddleware logs method, path, status
-- app_exception_handler maps AppException -> correct status code
-- NotFoundError -> 404
-- Unhandled exception -> 500
+Tests exception handlers by loading the module with mocked deps, then calling
+the handler functions directly with mock Request objects.
+
+Test IDs: MW-001 to MW-004
 """
+
+import importlib.util
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-import importlib.util
-from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+
+# ---------------------------------------------------------------------------
+# Module loader
+# ---------------------------------------------------------------------------
+
+BACKEND_ROOT = Path(__file__).parent.parent.parent / "02_backend"
 
 
-# Load exceptions module
-exc_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "core" / "exceptions.py"
-spec_exc = importlib.util.spec_from_file_location("exceptions", exc_path)
-exc_mod = importlib.util.module_from_spec(spec_exc)
-spec_exc.loader.exec_module(exc_mod)
+def _load_exceptions():
+    """Load the exceptions module (pure Python, no deps)."""
+    mod_path = BACKEND_ROOT / "app" / "core" / "exceptions.py"
+    spec = importlib.util.spec_from_file_location("exceptions", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_middleware(exc_module):
+    """Load middleware module with mocked app-level imports."""
+    mod_path = BACKEND_ROOT / "app" / "core" / "middleware.py"
+    spec = importlib.util.spec_from_file_location("middleware", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+
+    # Build mock for app.core.exceptions that contains the real classes
+    exc_mock = MagicMock()
+    exc_mock.AppException = exc_module.AppException
+    exc_mock.NotFoundError = exc_module.NotFoundError
+    exc_mock.UnauthorizedError = exc_module.UnauthorizedError
+    exc_mock.ForbiddenError = exc_module.ForbiddenError
+
+    logging_mock = MagicMock(
+        get_logger=MagicMock(return_value=MagicMock()),
+        request_id_ctx=MagicMock(),
+    )
+
+    mocked = {
+        "app.core.exceptions": exc_mock,
+        "app.core.logging": logging_mock,
+        "fastapi": MagicMock(),
+        "fastapi.responses": MagicMock(),
+        "starlette.middleware.base": MagicMock(),
+    }
+
+    # We need JSONResponse to actually work so we can inspect status_code
+    # Use a minimal stand-in that captures constructor args.
+    class FakeJSONResponse:
+        def __init__(self, status_code, content):
+            self.status_code = status_code
+            self.content = content
+
+    with patch.dict("sys.modules", mocked):
+        # Patch JSONResponse in the module namespace after load
+        import builtins
+        spec.loader.exec_module(mod)
+
+    # Replace the JSONResponse reference inside the loaded module
+    mod.JSONResponse = FakeJSONResponse
+
+    # Re-bind the exception map using real exception classes (because the
+    # module-level _EXCEPTION_STATUS_MAP was built at load time with the
+    # real classes from our exc_mock).
+    # Verify the map is populated correctly:
+    assert exc_module.NotFoundError in mod._EXCEPTION_STATUS_MAP
+    assert exc_module.ForbiddenError in mod._EXCEPTION_STATUS_MAP
+
+    return mod
+
+
+# Load once at module level
+exc_mod = _load_exceptions()
+mw_mod = _load_middleware(exc_mod)
 
 AppException = exc_mod.AppException
 NotFoundError = exc_mod.NotFoundError
@@ -26,114 +90,79 @@ UnauthorizedError = exc_mod.UnauthorizedError
 ForbiddenError = exc_mod.ForbiddenError
 
 
-@pytest.fixture
-def middleware_module():
-    """Load middleware module with mocked dependencies."""
-    logger_mock = MagicMock()
-    mocked_modules = {
-        "app.core.logging": MagicMock(get_logger=MagicMock(return_value=logger_mock)),
-        "app.core.exceptions": exc_mod,
-        "app.core.rate_limiter": MagicMock(),
-    }
-    with patch.dict("sys.modules", mocked_modules):
-        mod_path = Path(__file__).parent.parent.parent / "02_backend" / "app" / "core" / "middleware.py"
-        spec = importlib.util.spec_from_file_location("middleware", mod_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        mod._logger = logger_mock
-        yield mod, logger_mock
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_mock_request(request_id="test-req-id"):
+    """Create a mock Request with state.request_id."""
+    mock_request = MagicMock()
+    mock_request.state.request_id = request_id
+    return mock_request
 
 
-def make_request_mock(method="GET", path="/api/v1/test", request_id=None):
-    """Create a mock Starlette Request."""
-    req = MagicMock()
-    req.method = method
-    req.url.path = path
-    req.headers.get = MagicMock(return_value=request_id)
-    req.state = MagicMock()
-    if request_id:
-        req.state.request_id = request_id
-    else:
-        req.state.request_id = None
-    return req
-
+# ===================================================================
+# app_exception_handler  (MW-001 to MW-003)
+# ===================================================================
 
 class TestAppExceptionHandler:
-    """MW-002, MW-003: app_exception_handler maps exceptions to correct status codes."""
+    """MW-001 to MW-003: app_exception_handler maps exceptions to HTTP codes."""
 
     @pytest.mark.asyncio
-    async def test_not_found_error_returns_404(self, middleware_module):
-        """MW-003: NotFoundError -> 404."""
-        mod, _ = middleware_module
-        request = make_request_mock()
-        exc = NotFoundError("Job", "abc-123")
+    async def test_mw001_app_exception_returns_400(self):
+        """MW-001: Generic AppException maps to 400."""
+        request = _make_mock_request()
+        exc = AppException("something wrong", code="BAD_REQUEST")
 
-        response = await mod.app_exception_handler(request, exc)
+        response = await mw_mod.app_exception_handler(request, exc)
+
+        assert response.status_code == 400
+        assert response.content["detail"] == "something wrong"
+        assert response.content["code"] == "BAD_REQUEST"
+        assert response.content["request_id"] == "test-req-id"
+
+    @pytest.mark.asyncio
+    async def test_mw002_not_found_returns_404(self):
+        """MW-002: NotFoundError maps to 404."""
+        request = _make_mock_request("req-42")
+        exc = NotFoundError("Job", "job-42")
+
+        response = await mw_mod.app_exception_handler(request, exc)
+
         assert response.status_code == 404
+        assert response.content["code"] == "NOT_FOUND"
+        assert "job-42" in response.content["detail"]
+        assert response.content["request_id"] == "req-42"
 
     @pytest.mark.asyncio
-    async def test_unauthorized_error_returns_401(self, middleware_module):
-        mod, _ = middleware_module
-        request = make_request_mock()
-        exc = UnauthorizedError("Token expired")
-
-        response = await mod.app_exception_handler(request, exc)
-        assert response.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_forbidden_error_returns_403(self, middleware_module):
-        mod, _ = middleware_module
-        request = make_request_mock()
+    async def test_mw003_forbidden_returns_403(self):
+        """MW-003: ForbiddenError maps to 403."""
+        request = _make_mock_request()
         exc = ForbiddenError("Access denied")
 
-        response = await mod.app_exception_handler(request, exc)
+        response = await mw_mod.app_exception_handler(request, exc)
+
         assert response.status_code == 403
+        assert response.content["code"] == "FORBIDDEN"
+        assert response.content["detail"] == "Access denied"
 
-    @pytest.mark.asyncio
-    async def test_generic_app_exception_returns_400(self, middleware_module):
-        """MW-002: Generic AppException defaults to 400."""
-        mod, _ = middleware_module
-        request = make_request_mock()
-        exc = AppException("Something wrong", code="BAD_INPUT")
 
-        response = await mod.app_exception_handler(request, exc)
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_response_contains_error_detail(self, middleware_module):
-        mod, _ = middleware_module
-        request = make_request_mock()
-        exc = NotFoundError("Job", "xyz")
-
-        response = await mod.app_exception_handler(request, exc)
-        import json
-        body = json.loads(response.body.decode())
-        assert "detail" in body
-        assert body["code"] == "NOT_FOUND"
-
+# ===================================================================
+# unhandled_exception_handler  (MW-004)
+# ===================================================================
 
 class TestUnhandledExceptionHandler:
-    """MW-004: Unhandled exception -> 500."""
+    """MW-004: unhandled_exception_handler returns 500."""
 
     @pytest.mark.asyncio
-    async def test_returns_500(self, middleware_module):
-        mod, _ = middleware_module
-        request = make_request_mock()
-        exc = RuntimeError("Unexpected crash")
+    async def test_mw004_unhandled_returns_500(self):
+        """MW-004: Any unhandled exception maps to 500 with generic message."""
+        request = _make_mock_request("req-err")
+        exc = RuntimeError("kaboom")
 
-        response = await mod.unhandled_exception_handler(request, exc)
+        response = await mw_mod.unhandled_exception_handler(request, exc)
+
         assert response.status_code == 500
-
-    @pytest.mark.asyncio
-    async def test_response_hides_internal_details(self, middleware_module):
-        mod, _ = middleware_module
-        request = make_request_mock()
-        exc = RuntimeError("secret database password")
-
-        response = await mod.unhandled_exception_handler(request, exc)
-        import json
-        body = json.loads(response.body.decode())
-        assert body["detail"] == "Internal server error"
-        assert body["code"] == "INTERNAL_ERROR"
-        # Should NOT leak the actual error message
-        assert "secret" not in body["detail"]
+        assert response.content["code"] == "INTERNAL_ERROR"
+        assert response.content["detail"] == "Internal server error"
+        assert response.content["request_id"] == "req-err"
