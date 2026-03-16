@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 # PPStructure needs sufficient resolution for layout detection.
 # Images with shorter side below this threshold will be upscaled.
-MIN_SHORT_SIDE = 1500
-MAX_LONG_SIDE = 4000
+MIN_SHORT_SIDE = 960
+MAX_LONG_SIDE = 1280
 
 
 def detect_file_type(file_content: bytes) -> str:
@@ -31,7 +31,7 @@ def load_images(file_content: bytes) -> List[np.ndarray]:
 
     if file_type == "pdf":
         from pdf2image import convert_from_bytes
-        pil_images = convert_from_bytes(file_content, dpi=300)
+        pil_images = convert_from_bytes(file_content, dpi=200)
         logger.info(f"Loaded PDF with {len(pil_images)} pages")
     else:
         pil_images = [Image.open(BytesIO(file_content))]
@@ -53,6 +53,22 @@ def prepare_image(image: np.ndarray) -> np.ndarray:
     h, w = image.shape[:2]
     short_side = min(h, w)
     long_side = max(h, w)
+
+    # Downscale large images to fit GPU memory (e.g. 300dpi PDFs)
+    if long_side > MAX_LONG_SIDE:
+        scale = MAX_LONG_SIDE / long_side
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        logger.info(
+            f"Downscaling image from {w}x{h} to {new_w}x{new_h} "
+            f"(scale={scale:.2f}x) to fit GPU memory"
+        )
+        pil_img = Image.fromarray(image)
+        pil_img = pil_img.resize((new_w, new_h), Image.LANCZOS)
+        image = np.array(pil_img)
+        h, w = image.shape[:2]
+        short_side = min(h, w)
+        long_side = max(h, w)
 
     if short_side < MIN_SHORT_SIDE:
         scale = MIN_SHORT_SIDE / short_side

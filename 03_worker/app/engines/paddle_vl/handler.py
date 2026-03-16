@@ -11,6 +11,8 @@ from .preprocessing import load_images, prepare_image
 from .postprocessing import (
     extract_regions,
     extract_regions_from_raw_ocr,
+    extract_regions_v3,
+    extract_regions_v3_ocr_fallback,
     assess_result_quality,
     format_structured_output,
 )
@@ -129,6 +131,14 @@ class StructuredExtractHandler(BaseHandler):
 
             all_pages.append(page_result)
 
+            # Free GPU memory between pages for multi-page docs
+            if len(images) > 1:
+                try:
+                    import paddle
+                    paddle.device.cuda.empty_cache()
+                except Exception:
+                    pass
+
         quality_ok = assess_result_quality(all_pages)
 
         # Tier 2: Pure OCR fallback if structured failed
@@ -153,40 +163,17 @@ class StructuredExtractHandler(BaseHandler):
         return format_structured_output(all_pages, output_format)
 
     def _extract_v3_structured(self, results: list, page_idx: int) -> Dict:
-        """Extract structured regions from PPStructureV3 output."""
-        regions = []
-        for r in results:
-            # PPStructureV3 returns dict-like results with layout info
-            if hasattr(r, 'get'):
-                # Try to extract text from various result formats
-                rec_texts = r.get("rec_texts", [])
-                if rec_texts:
-                    text = "\n".join(rec_texts)
-                    regions.append({
-                        "type": "text",
-                        "text": text,
-                        "bbox": [],
-                    })
-                # Also check for direct text content
-                elif "text" in r:
-                    regions.append({
-                        "type": "text",
-                        "text": r["text"],
-                        "bbox": [],
-                    })
-        return {"page_number": page_idx + 1, "regions": regions}
+        """Extract structured regions from PPStructureV3 output.
+
+        Delegates to ``extract_regions_v3`` in postprocessing which handles
+        multiple V3 output formats (PaddleX parsing_result, direct blocks,
+        legacy flat rec_texts).
+        """
+        return extract_regions_v3(results, page_idx)
 
     def _extract_v3_ocr_fallback(self, results: list, page_idx: int) -> Dict:
-        """Extract text from pure OCR (v3) as fallback."""
-        regions = []
-        for r in results:
-            if hasattr(r, 'get'):
-                rec_texts = r.get("rec_texts", [])
-                if rec_texts:
-                    text = "\n".join(rec_texts)
-                    regions.append({
-                        "type": "text",
-                        "text": text,
-                        "bbox": [],
-                    })
-        return {"page_number": page_idx + 1, "regions": regions}
+        """Extract text from pure OCR (v3) as fallback.
+
+        Delegates to ``extract_regions_v3_ocr_fallback`` in postprocessing.
+        """
+        return extract_regions_v3_ocr_fallback(results, page_idx)

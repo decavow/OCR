@@ -75,6 +75,7 @@ class FileProxyService:
             original_name=file.original_name,
             method=request.method,
             created_at=request.created_at,
+            service_type_id=service_type.id,
         )
 
         # Store in MinIO results bucket
