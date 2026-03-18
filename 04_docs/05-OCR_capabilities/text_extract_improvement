@@ -1,0 +1,611 @@
+# OCR Workers — Technical Specification
+
+## Context
+
+Đây là hệ thống OCR platform. Người dùng upload tài liệu qua Web UI, chọn worker phù hợp và định dạng output, hệ thống xử lý và trả kết quả. Mỗi worker là một **service độc lập**, xử lý theo pipeline một chiều. Backend đã handle retry khi worker fail — worker không cần logic fallback hay retry.
+
+**Hardware constraint**: NVIDIA RTX 3070 · 8 GB VRAM. Mọi quyết định về model, batch size, và pipeline design đều phải đảm bảo không OOM trên cấu hình này.
+
+**Ngôn ngữ**: Vietnamese + English (printed text only, không handwriting).
+
+---
+
+## Kiến trúc tổng quan
+
+### Danh sách workers
+
+| Worker ID | Tên | Khả năng | Output formats |
+|-----------|-----|----------|----------------|
+| `ocr_text_raw (PP-OCRv5)` | Raw Text Extract | Trích xuất text thuần, không quan tâm layout | `txt`, `json` |
+| `ocr_text_formatted (Marker)` | Formatted Text Extract | Trích xuất text giữ nguyên layout, reading order, cột, heading | `md`, `html`, `json` |
+| `ocr_text_styled (Tesseract + OpenCV)` | Styled Text Extract | Trích xuất text giữ nguyên font, bold, italic, size, color | `docx`, `html` |
+
+### Pipeline chung cho mọi worker
+
+```
+User chọn worker + upload files + chọn output format
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  QUALITY CHECK                                       │
+│  Đánh giá chất lượng ảnh đầu vào                    │
+│  → confidence score + danh sách issues               │
+│  → Nếu score thấp: trả WARNING cho user             │
+│     • User chọn CANCEL → dừng, trả file về          │
+│     • User chọn IGNORE → tiếp tục xử lý             │
+└──────────────────────┬──────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  PREPROCESSING                                       │
+│  Tự động sửa các vấn đề đã detect ở quality check   │
+│  Chạy CPU, không chiếm VRAM                         │
+└──────────────────────┬──────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  PROCESSING (khác nhau mỗi worker)                   │
+│  Load model → inference → unload                    │
+│  Phải đảm bảo VRAM không vượt 7.5 GB tại mọi thời  │
+│  điểm. Nếu pipeline cần nhiều model, phải load      │
+│  tuần tự: load → run → free → load tiếp.            │
+└──────────────────────┬──────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  POSTPROCESSING                                      │
+│  Convert kết quả sang output format yêu cầu         │
+│  Validate & clean output                            │
+└──────────────────────┬──────────────────────────────┘
+                       │
+                       ▼
+                 Trả kết quả
+```
+
+---
+
+## Quality Check
+
+Module dùng chung cho tất cả workers. Chạy hoàn toàn trên CPU. Mục đích: phát hiện các vấn đề ảnh hưởng đến chất lượng OCR và cho phép user quyết định tiếp tục hay không.
+
+### Các kiểm tra thực hiện
+
+#### 1. Blur detection
+
+**Vấn đề**: Ảnh mờ là nguyên nhân #1 gây lỗi OCR. Không thể sửa hoàn toàn bằng software.
+
+**Phương pháp**: Laplacian variance. Laplacian là toán tử đạo hàm bậc 2, đo mức độ thay đổi cường độ pixel — tức là đo edges. Ảnh nét có nhiều edges rõ ràng nên variance cao (hàng trăm đến hàng ngàn). Ảnh mờ mất edges nên variance thấp.
+
+**Cách thực hiện**: Áp Laplacian kernel lên ảnh grayscale → tính variance của kết quả → so với threshold.
+
+**Threshold**: ~100 cho scanner, ~80 cho camera, ~50 cho fax. Variance < threshold → flag blurry.
+
+**Mức độ ảnh hưởng**: Nghiêm trọng nhất. Nếu variance < 20 → nên strong warning vì output sẽ rất kém.
+
+#### 2. Brightness & contrast
+
+**Vấn đề**: Ảnh quá tối, quá sáng, hoặc tương phản thấp khiến OCR khó phân biệt text với nền.
+
+**Phương pháp**: Chuyển ảnh sang grayscale → tính mean (độ sáng) và standard deviation (tương phản).
+
+**Threshold**:
+- Mean < 60 → quá tối
+- Mean > 220 → quá sáng (washed out)
+- Std < 30 → tương phản thấp
+
+**Mức độ ảnh hưởng**: Trung bình. Sửa được bằng CLAHE ở bước preprocessing.
+
+#### 3. Noise estimation
+
+**Vấn đề**: Nhiễu hạt (từ scan kém, fax, photocopy) tạo chấm nhỏ mà OCR có thể nhầm thành dấu chấm hoặc dấu tiếng Việt.
+
+**Phương pháp**: Ước lượng sigma noise bằng Median Absolute Deviation (MAD) trên ảnh đã lọc Laplacian. Dùng median thay vì mean vì median không bị ảnh hưởng bởi text edges — chỉ đo noise thuần.
+
+**Cách thực hiện**: Áp Laplacian kernel 3×3 → lấy median của |giá trị| → nhân hệ số chuẩn hóa (1.4826 / √20) → ra sigma.
+
+**Threshold**: Sigma > 15 → ảnh nhiễu đáng kể.
+
+#### 4. Skew detection
+
+**Vấn đề**: Document nghiêng dù chỉ 1-2° ảnh hưởng đến reading order và table recognition.
+
+**Phương pháp**: Kết hợp hai kỹ thuật, lấy consensus:
+
+**Hough Lines**: Detect các đường thẳng trong ảnh → lọc lấy đường gần ngang (±30°) → lấy median góc. Nhanh nhưng có thể bị nhiễu bởi đường kẻ dọc.
+
+**Projection Profile**: Binary ảnh → thử xoay từ -5° đến +5° (bước 0.5°) → ở mỗi góc, tính tổng pixel theo hàng ngang (horizontal projection) → góc nào cho variance cao nhất = text rows thẳng nhất = góc nghiêng thật. Chậm hơn nhưng robust hơn. Để tăng tốc: downscale ảnh 4x trước khi thử xoay.
+
+**Logic consensus**: Nếu hai methods khác nhau < 1° → lấy trung bình. Nếu khác > 1° → dùng projection profile.
+
+**Threshold**: |góc| > 0.5° → flag cần deskew.
+
+#### 5. Orientation detection
+
+**Vấn đề**: Ảnh bị xoay 90°/180°/270° do scan lật hoặc camera chụp ngang.
+
+**Phương pháp**:
+- Primary: Tesseract OSD (Orientation & Script Detection) ở mode `--psm 0`. Trả về góc cần xoay.
+- Backup (nếu Tesseract OSD fail): Heuristic dựa trên aspect ratio của text components. Text ngang có connected components rộng hơn cao (AR > 3). Nếu đa số components cao hơn rộng (AR < 0.5) → ảnh xoay 90°.
+
+#### 6. Perspective distortion
+
+**Vấn đề**: Ảnh chụp từ camera cầm tay bị biến dạng hình thang.
+
+**Phương pháp**: Tìm viền document — contour tứ giác lớn nhất chiếm > 30% diện tích ảnh. Sắp xếp 4 đỉnh (top-left = x+y nhỏ nhất, top-right = y-x nhỏ nhất, bottom-right = x+y lớn nhất, bottom-left = y-x lớn nhất). Nếu 4 đỉnh lệch > 5% đường chéo so với 4 góc ảnh → có distortion.
+
+#### 7. Resolution check
+
+**Phương pháp**: Ước lượng DPI từ kích thước ảnh, giả định A4 (cạnh dài / 11.69 inch). Nếu DPI < 150 hoặc cạnh ngắn < 500 px → flag low resolution.
+
+#### 8. Black border detection
+
+**Phương pháp**: Lấy 4 dải mỏng (2% kích thước) ở 4 cạnh → tính mean pixel. Mean < 30 → có viền đen.
+
+### Scoring
+
+Điểm khởi đầu 1.0, mỗi vấn đề trừ theo trọng số:
+
+| Vấn đề | Trọng số | Lý do |
+|--------|----------|-------|
+| Blur | -0.50 (tỷ lệ severity) | Không sửa được, ảnh hưởng trực tiếp nhất |
+| Low contrast | -0.20 | Sửa được bằng CLAHE |
+| Too dark / bright | -0.15 | Sửa được bằng histogram |
+| Low DPI | -0.15 | Upscale không thêm detail mới |
+| Noise | -0.10 | Bilateral filter sửa tốt |
+| Perspective | -0.10 | 4-point warp sửa chính xác |
+| Skew | -0.05 | Affine rotation dễ sửa |
+| Orientation | -0.05 | Xoay 90° trivial |
+| Black border | -0.02 | Crop đơn giản |
+
+Blur tính tỷ lệ: `penalty = 0.5 × (1 - blur_score / threshold)`. Ảnh cực mờ (score gần 0) bị trừ gần hết 0.5, ảnh hơi mờ (score gần threshold) bị trừ ít.
+
+### Output trả về cho user
+
+```
+{
+  "quality_score": 0.55,          // 0.0 - 1.0
+  "level": "poor",                // good | acceptable | poor | reject
+  "issues": [
+    {"type": "blur", "severity": "high", "detail": "Laplacian variance = 45"},
+    {"type": "skew", "severity": "low", "detail": "Detected angle: 2.3°"},
+    {"type": "low_contrast", "severity": "medium", "detail": "Std = 22"}
+  ],
+  "recommendation": "Image is blurry. OCR accuracy will be reduced. Consider re-scanning at higher quality."
+}
+```
+
+User nhận thông tin này và quyết định CANCEL hoặc IGNORE WARNING để tiếp tục.
+
+---
+
+## Preprocessing
+
+Module dùng chung cho tất cả workers. Chạy CPU, 0 VRAM. Chỉ sửa những gì quality check đã flag — ảnh tốt đi qua mà không bị biến đổi.
+
+### Thứ tự thực hiện
+
+**Nguyên tắc**: Geometry trước, pixel sau. Nếu sửa pixel trước rồi xoay → interpolation khi xoay làm mất chất lượng pixel vừa cải thiện.
+
+#### Step 1: Orientation fix (nếu flagged)
+
+Xoay ảnh 90°/180°/270° về đúng hướng. Phải làm đầu tiên vì mọi xử lý sau đều giả định ảnh đứng đúng hướng.
+
+#### Step 2: Perspective correction (nếu flagged)
+
+4-point perspective warp. Lấy 4 corners đã detect → tính ma trận biến đổi → warp thành hình chữ nhật. Kích thước output = kích thước lớn nhất của cạnh trên/dưới và trái/phải.
+
+Phải trước deskew vì perspective warp thay đổi toạ độ toàn bộ ảnh.
+
+#### Step 3: Deskew (nếu |angle| > 0.5°)
+
+Affine rotation. Xoay ngược lại góc nghiêng đã detect.
+
+Dùng `BORDER_REPLICATE` (lặp pixel ở cạnh) thay vì để trống (tạo viền đen). Tính lại bounding box sau xoay để không crop mất content ở góc.
+
+#### Step 4: Border removal (nếu flagged)
+
+Threshold toàn ảnh (ngưỡng 30) → tìm bounding box vùng sáng → crop + padding 5px.
+
+Phải sau deskew vì xoay có thể tạo viền đen mới.
+
+#### Step 5: Resolution upscale (nếu DPI < 200 hoặc cạnh ngắn < 1000px)
+
+Bicubic interpolation, scale factor = max(2.0, 300/DPI_hiện_tại), cap tại 4x.
+
+Dùng `INTER_CUBIC` cho upscale (smooth, giữ edge). Dùng `INTER_AREA` cho downscale (tránh aliasing).
+
+#### Step 6: Denoise (nếu flagged)
+
+Bilateral filter. Khác Gaussian blur ở chỗ: Gaussian làm mờ mọi thứ kể cả text edges, còn bilateral chỉ trung bình hóa pixel **gần nhau VÀ giống nhau** — pixel ở edge (khác nhau mạnh) được giữ nguyên. Quan trọng cho OCR vì edges = ranh giới ký tự.
+
+Parameters: d=9, sigmaColor=75, sigmaSpace=75.
+
+#### Step 7: Contrast enhancement (nếu low contrast / too dark / too bright)
+
+CLAHE (Contrast Limited Adaptive Histogram Equalization) trên L channel (LAB color space).
+
+Tại sao CLAHE, không phải histogram equalization thường:
+- **Adaptive**: chia ảnh thành ô 8×8, equalize từng ô → xử lý được lighting không đều (shadow, scan gradient)
+- **Contrast Limited**: clip histogram trước khi redistribute → tránh over-amplify noise ở vùng uniform
+- Apply trên L channel (lightness) trong LAB color space → chỉ chỉnh sáng, giữ nguyên màu gốc
+
+#### Step 8: Binarization (CHỈ cho worker `ocr_text_styled (Tesseract + OpenCV)`)
+
+Worker `ocr_text_raw (PP-OCRv5)` và `ocr_text_formatted (Marker)` dùng VLM models — chúng xử lý color/grayscale tốt hơn binary. Không binarize.
+
+Worker `ocr_text_styled (Tesseract + OpenCV)` cần binary image cho style detection (stroke width → bold, slant angle → italic). Dùng adaptive Gaussian threshold (block 11×11, C=2) — xử lý được lighting không đều, tốt hơn Otsu global threshold.
+
+### Resize cho VRAM management
+
+Ngoài các correction trên, preprocessing cũng resize ảnh về max 2048px cạnh dài (dùng `INTER_AREA`) để đảm bảo VLM models không bị OOM do input quá lớn. Community feedback cho thấy các model OCR hoạt động tốt nhất ở khoảng 1080p-2K; 4K trở lên không tăng accuracy mà tăng VRAM đáng kể.
+
+---
+
+## Worker: `ocr_text_raw (PP-OCRv5)`
+
+### Mục đích
+
+Trích xuất text thuần từ ảnh/PDF. Không quan tâm layout, font, style. Output là chuỗi text đơn giản.
+
+### Model sử dụng
+
+**PP-OCRv5** — pipeline OCR truyền thống gồm 3 stage:
+1. Text Detection (DB algorithm): tìm vùng chứa text, trả bounding boxes
+2. Angle Classification: phát hiện text bị xoay → xoay lại
+3. Text Recognition (SVTR + LCNet): nhận dạng ký tự trong từng bbox
+
+**Tại sao chọn model này**:
+- Cực nhẹ: ~2M params mỗi stage, tổng VRAM ~0.5 GB
+- Hỗ trợ 100+ ngôn ngữ
+- Throughput cao: ~50-100 pages/min trên RTX 3070
+- PP-OCRv5 cải thiện accuracy 13% so với v4
+
+**VRAM budget**: ~0.5 GB. Dư rất nhiều trên 8 GB card.
+
+### Tối ưu cho RTX 3070
+
+- Giới hạn GPU memory allocation ở 2 GB (tránh framework pre-allocate toàn bộ VRAM)
+- Set PaddlePaddle allocator strategy là `auto_growth` (allocate dần khi cần, không grab hết lúc đầu)
+- Batch recognition: 16 images/batch
+- Input đã resize ≤ 2048px từ preprocessing
+
+### Lưu ý Vietnamese
+
+PP-OCRv5 mở rộng hỗ trợ Latin-script languages nhưng Vietnamese có dấu thanh đặc thù (ă, ơ, ư, stacked diacritics như ắ, ấ, ế). Cần:
+- Dùng lang config `vi` nếu có sẵn, hoặc `latin` + custom dictionary
+- Benchmark CER trên Vietnamese test set trước production
+- Nếu accuracy thấp: cân nhắc fine-tune recognition model với Vietnamese data
+
+### Processing flow
+
+```
+Ảnh đã preprocessing
+    │
+    ▼
+Load PP-OCRv5 (0.5 GB VRAM)
+    │
+    ▼
+Chạy OCR pipeline (detect → classify angle → recognize)
+    │
+    ▼
+Thu thập kết quả: list of (text, confidence, bbox) per text block
+    │
+    ▼
+Giải phóng model
+```
+
+### Postprocessing
+
+**Cho output `txt`**:
+- Nối tất cả text blocks theo thứ tự top-to-bottom, left-to-right
+- Loại bỏ ký tự rác (confidence < 0.3)
+- Trim whitespace thừa
+- Output: plain text string
+
+**Cho output `json`**:
+- Giữ nguyên cấu trúc: mỗi text block = `{text, confidence, bbox}`
+- Tính confidence trung bình toàn document
+- Output: JSON object chứa danh sách blocks + metadata
+
+---
+
+## Worker: `ocr_text_formatted (Marker)`
+
+### Mục đích
+
+Trích xuất text giữ nguyên cấu trúc document: reading order, cột, headings, bảng, lists. Output là Markdown hoặc HTML có cấu trúc.
+
+### Model sử dụng
+
+**Marker** (dựa trên Surya OCR engine) — pipeline end-to-end chuyển PDF/image thành Markdown có cấu trúc. Bên trong gồm nhiều model nhỏ:
+1. Surya Text Detection: phát hiện vùng text
+2. Surya Layout Analysis: phân loại vùng (text, table, figure, heading, list)
+3. Surya Recognition: nhận dạng ký tự
+4. Surya Table Recognition: phân tích cấu trúc bảng (rows, columns, cells)
+5. Deterministic post-processing: ghép các vùng thành Markdown
+
+**Tại sao chọn model này**:
+- Output Markdown trực tiếp — đúng nhu cầu A2
+- Xử lý tốt multi-column, tables, equations
+- Active community (50K+ GitHub stars kết hợp Marker + Surya)
+
+**VRAM budget**: ~3.5 GB trung bình, ~5 GB peak (với batch=8).
+
+### Tối ưu cho RTX 3070
+
+**Vấn đề chính**: Marker mặc định dùng batch size 32 cho mỗi stage. Mỗi batch item chiếm 220 MB VRAM. Batch 32 = ~7 GB → OOM trên 8 GB card.
+
+**Giải pháp**: Giảm batch size xuống 8 cho cả 3 stage (detection, recognition, layout). Batch 8 × 220 MB = ~1.8 GB per stage, tổng peak ~4-5 GB.
+
+**Các env vars phải set TRƯỚC khi import Marker**:
+- `DETECTOR_BATCH_SIZE=8`
+- `RECOGNITION_BATCH_SIZE=8`
+- `LAYOUT_BATCH_SIZE=8`
+- `INFERENCE_RAM=8`
+- `TORCH_DEVICE=cuda`
+
+**Trade-off**: Throughput giảm 3-4x so với batch 32, accuracy không bị ảnh hưởng.
+
+**Nếu vẫn OOM trên trang đặc biệt phức tạp**: giảm batch về 4.
+
+### Processing flow
+
+```
+Ảnh đã preprocessing
+    │
+    ▼
+Set env vars cho batch size
+    │
+    ▼
+Load Marker models (~4-5 GB VRAM peak)
+    │
+    ▼
+Chạy Marker converter (detect → layout → recognize → table → assemble)
+    │
+    ▼
+Thu thập kết quả: Markdown string + extracted images (nếu có)
+    │
+    ▼
+Giải phóng models (gc + empty_cache)
+```
+
+### Postprocessing
+
+**Cho output `md`**:
+- Normalize heading levels (tránh nhảy h1 → h4)
+- Merge paragraphs bị ngắt thừa (do hard line break trong PDF)
+- Clean table formatting (align cột, fix cell merge sai)
+- Loại page numbers, running headers nếu lặp lại mỗi trang
+- Output: Markdown string
+
+**Cho output `html`**:
+- Convert Markdown → HTML (dùng markdown parser)
+- Thêm CSS cơ bản cho table, heading
+- Output: HTML string
+
+**Cho output `json`**:
+- Parse Markdown thành cấu trúc: list of blocks, mỗi block = `{type: heading|paragraph|table|list|figure, content, level}`
+- Output: structured JSON
+
+---
+
+## Worker: `ocr_text_styled (Tesseract + OpenCV)`
+
+### Mục đích
+
+Trích xuất text giữ nguyên visual style: font size, bold, italic, underline, text color, superscript/subscript. Output là DOCX hoặc rich HTML gần y hệt bản gốc.
+
+### Thách thức
+
+Không có open-source model nào trực tiếp output font metadata. Tất cả VLM-based OCR chỉ output text hoặc markdown — mất hết style info. Phải xây pipeline hybrid: OCR lấy text + bounding boxes → Computer Vision phân tích style từng vùng ảnh → reconstruct document.
+
+### Models & tools sử dụng
+
+Pipeline gồm 4 module tuần tự, **toàn bộ chạy CPU (0 VRAM)**:
+
+1. **Tesseract 5** (hOCR mode): OCR lấy text + word-level bounding boxes + confidence
+2. **OpenCV style analyzer**: phân tích 7 thuộc tính style cho mỗi word bbox
+3. **Layout reconstructor**: sắp xếp words thành paragraphs theo reading order
+4. **Document generator**: tạo DOCX/HTML với styled text
+
+**Tại sao chạy CPU**: Tesseract là CPU-based, OpenCV analysis là CPU-based. Worker này không cần GPU. Điều này có lợi ích phụ: GPU rảnh cho các worker khác nếu hệ thống chạy nhiều worker song song.
+
+### Module 1: Tesseract hOCR
+
+Tesseract ở mode hOCR output HTML chứa mỗi word kèm:
+- Text content
+- Bounding box (x, y, width, height)
+- Confidence score
+- Font size hint (attribute `x_fsize`)
+
+Config cần thiết:
+- Language: `vie` (Vietnamese traineddata)
+- DPI: khai báo đúng DPI ảnh (300 cho scan) → ảnh hưởng trực tiếp font size estimation
+- Page segmentation mode 3 (fully automatic)
+
+### Module 2: OpenCV style analysis
+
+Với mỗi word bounding box từ Tesseract, crop vùng ảnh tương ứng rồi phân tích 7 thuộc tính:
+
+#### 2a. Font size (~90% accuracy)
+
+**Phương pháp**: `font_size_pt = bbox_height_px / DPI × 72`
+
+Chiều cao bbox tỷ lệ thuận với font size. Chia cho DPI ra inch, nhân 72 ra points.
+
+**Dependency**: DPI phải chính xác. Sai DPI → font size sai tuyến tính.
+
+#### 2b. Bold detection (~85% accuracy)
+
+**Phương pháp**: Distance Transform trên binary image → average stroke width.
+
+**Nguyên lý**: Chữ bold có nét dày hơn chữ thường. Distance Transform tính khoảng cách từ mỗi text pixel tới nền gần nhất → trung bình chính là stroke width. Stroke width > ngưỡng → bold.
+
+**Ngưỡng**: 2.5 pixel ở 300 DPI. Scale theo DPI: `threshold = 2.5 × (DPI / 300)`.
+
+#### 2c. Italic detection (~80% accuracy)
+
+**Phương pháp**: Fit line qua toạ độ text pixels → tính góc nghiêng so với phương đứng.
+
+**Nguyên lý**: Chữ italic nghiêng sang phải. |góc| > 8° → italic.
+
+**Hạn chế**: Dấu tiếng Việt (đặc biệt dấu ngã) có thể gây false positive.
+
+#### 2d. Underline detection (~75% accuracy)
+
+**Phương pháp**: Crop phần dưới 15% bbox → Canny edge detection → Hough line detection → tìm đường ngang dài ≥ 50% chiều rộng bbox.
+
+**Hạn chế**: Dễ nhầm với table borders. Cần cross-check: nếu toàn bộ words trên dòng đều "underline" → có thể là table border.
+
+#### 2e. Text color (~95% accuracy)
+
+**Phương pháp**: Dùng binary mask xác định text pixels → lấy median RGB.
+
+Dùng median thay vì mean vì median robust hơn (bỏ qua outlier pixels ở ranh giới text/nền).
+
+Chỉ hoạt động với color scan. Ảnh grayscale → default black.
+
+#### 2f. Superscript / Subscript (~70% accuracy)
+
+**Phương pháp**: So sánh vị trí dọc (y) của word bbox với baseline dòng chứa nó.
+
+- Tâm word nằm trên tâm dòng + font size nhỏ hơn xung quanh → superscript
+- Tâm word nằm dưới tâm dòng + font size nhỏ hơn → subscript
+
+#### 2g. Font family (~50% accuracy)
+
+**Phương pháp**: Heuristic phân loại serif / sans-serif / monospace.
+
+- Serif detection: thinning text thành skeleton → đếm branch endpoints → tỷ lệ cao = có serifs
+- Monospace: kiểm tra chiều rộng per character có đều nhau không
+
+**Output**: Chỉ 3 nhóm (serif → Times New Roman, sans-serif → Arial, monospace → Courier New). Không thể xác định chính xác tên font — đây là hạn chế lớn nhất của approach open-source.
+
+### Module 3: Layout reconstruction
+
+Sắp xếp words thành paragraphs theo reading order:
+
+1. **Column detection**: Tạo x-projection histogram (tổng pixel theo cột dọc), tìm valleys (khoảng trống dọc lớn) → chia page thành columns
+2. **Reading order**: Sort text blocks theo (column_group, y_position, x_position)
+3. **Paragraph grouping**: Khoảng cách dọc giữa 2 dòng > 1.5 × line_height → paragraph mới
+4. **Header/footer**: Blocks ở 10% trên/dưới page → đánh dấu riêng
+
+### Module 4: Document generation
+
+**Cho output `docx`**:
+- Tạo document bằng python-docx
+- Mỗi paragraph chứa nhiều runs (mỗi run = 1 word hoặc nhóm words cùng style)
+- Set font properties: size (Pt), bold, italic, underline, color (RGBColor), superscript, subscript, font name
+- Page setup: kích thước từ ảnh gốc + DPI, margins ước lượng từ content bbox
+
+**Cho output `html`**:
+- Tạo HTML với inline CSS cho mỗi span
+- `<span style="font-size: 12pt; font-weight: bold; color: #333333;">text</span>`
+- Table generation nếu detect table structure
+
+### Processing flow
+
+```
+Ảnh đã preprocessing (binarized)
+    │
+    ▼
+Module 1: Tesseract hOCR (CPU)
+    → text + bboxes per word
+    │
+    ▼
+Module 2: OpenCV style analysis (CPU)
+    → StyleInfo per word: font_size, bold, italic, underline, color, super/sub, font_family
+    │
+    ▼
+Module 3: Layout reconstruction (CPU)
+    → words → paragraphs → reading order
+    │
+    ▼
+Module 4: Document generation (CPU)
+    → DOCX hoặc HTML
+```
+
+Toàn bộ pipeline chạy CPU. Không cần GPU memory management.
+
+### Postprocessing
+
+- Merge runs liên tiếp có cùng style (giảm số runs trong DOCX)
+- Validate: kiểm tra không có paragraph trống, không có style bất thường (font size 0, color ngoài range)
+- Optional QA: render DOCX thành image (LibreOffice headless) → tính SSIM với ảnh gốc → flag trang có SSIM thấp
+
+### Bảng accuracy tổng hợp
+
+| Thuộc tính | Accuracy | Bottleneck | Cải thiện bằng |
+|-----------|----------|------------|----------------|
+| Text content | ~95% | Dấu tiếng Việt | Fine-tune Tesseract |
+| Font size | ~90% | DPI estimation | Khai báo DPI chính xác |
+| Bold | ~85% | Font weight variations | Tuning threshold per doc type |
+| Italic | ~80% | Vietnamese diacritics | Exclude diacritics regions |
+| Color | ~95% | Cần color scan | — |
+| Underline | ~75% | Table borders | Cross-check logic |
+| Super/subscript | ~70% | Mixed font sizes | Better baseline detection |
+| Font name | ~50% | Chỉ 3 nhóm | Font matching database |
+
+---
+
+## GPU Memory Management
+
+### Nguyên tắc chung
+
+Mỗi worker chạy độc lập. Khi worker nhận job:
+1. Load model(s) cần thiết lên GPU
+2. Chạy inference
+3. Giải phóng hoàn toàn GPU memory trước khi trả kết quả
+
+Nếu pipeline trong 1 worker cần nhiều model (hiện tại chỉ `ocr_text_formatted (Marker)` load Marker gồm nhiều sub-model, nhưng chúng load/unload nội bộ bởi Marker), phải đảm bảo:
+- Không có 2 model nặng cùng tồn tại trên GPU
+- Sau mỗi lần unload: gọi garbage collector + torch.cuda.empty_cache() + torch.cuda.synchronize()
+- Nếu bỏ qua → VRAM fragment → model tiếp không load được dù free VRAM đủ
+
+### VRAM budget per worker
+
+| Worker | Model(s) | VRAM peak | An toàn trên 8GB? |
+|--------|----------|-----------|-------------------|
+| `ocr_text_raw (PP-OCRv5)` | PP-OCRv5 | ~0.5 GB | ✅ Rất thoải mái |
+| `ocr_text_formatted (Marker)` | Marker (batch=8) | ~5 GB | ✅ Vừa đủ |
+| `ocr_text_styled (Tesseract + OpenCV)` | Tesseract + OpenCV | 0 GB (CPU) | ✅ Không dùng GPU |
+
+### Config quan trọng per worker
+
+**`ocr_text_raw (PP-OCRv5)`**:
+- PaddlePaddle: `FLAGS_allocator_strategy=auto_growth`
+- GPU memory limit: 2 GB
+- Recognition batch: 16
+
+**`ocr_text_formatted (Marker)`**:
+- Marker batch sizes: 8 (detector, recognition, layout) — set trước khi import
+- `INFERENCE_RAM=8`
+- Single worker (không parallel)
+
+**`ocr_text_styled (Tesseract + OpenCV)`**:
+- Không cần GPU config
+- Tesseract: `--dpi 300`, lang `vie`, psm 3
+
+---
+
+## Vietnamese-specific Notes
+
+### Thách thức dấu tiếng Việt
+
+- **Dấu thanh**: sắc, huyền, hỏi, ngã, nặng — đặc biệt hỏi (ỏ) vs ngã (õ) rất dễ nhầm ở low resolution
+- **Ký tự riêng**: ă, â, ê, ô, ơ, ư — nhiều OCR training sets thiếu
+- **Stacked diacritics**: ắ, ấ, ế, ố, ớ, ứ — dấu chồng dấu, tăng chiều cao character → ảnh hưởng font size estimation ở `ocr_text_styled (Tesseract + OpenCV)`
+
+### Ảnh hưởng tới từng worker
+
+| Worker | Ảnh hưởng | Giải pháp |
+|--------|-----------|-----------|
+| `ocr_text_raw (PP-OCRv5)` | PP-OCRv5 có thể mất dấu | Dùng lang=vi, benchmark CER riêng cho dấu |
+| `ocr_text_formatted (Marker)` | Marker/Surya: hỗ trợ 90+ ngôn ngữ nhưng chưa verify Vietnamese kỹ | Force OCR mode, test reading order với text có dấu |
+| `ocr_text_styled (Tesseract + OpenCV)` | Italic detection false positive do dấu ngã; font size estimation sai do stacked diacritics tăng bbox height | Exclude diacritics vùng khi detect italic; calibrate font size với Vietnamese test data |
+
+### Benchmark trước production
+
+Test set: 50-100 trang gồm hóa đơn VAT, hợp đồng, CMND/CCCD, sách, biểu mẫu hành chính.
+
+Metrics: CER (quan trọng nhất), WER, Diacritics Accuracy (đo riêng dấu thanh), Layout Fidelity (cho formatted), Processing time per page.
