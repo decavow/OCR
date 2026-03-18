@@ -29,6 +29,9 @@ async def startup() -> None:
     setup_logging()
     logger.info("Starting application...")
 
+    # Validate security config early
+    settings.validate_secret_key()
+
     # Database
     logger.info("Initializing database...")
     Base.metadata.create_all(bind=engine, checkfirst=True)
@@ -81,44 +84,58 @@ def _register_periodic_tasks() -> None:
     """Register all periodic background tasks in the scheduler."""
     from app.core.scheduler import scheduler
 
-    async def heartbeat_check():
-        db = SessionLocal()
-        try:
-            from app.modules.job.orchestrator import RetryOrchestrator
-            from app.modules.job.heartbeat_monitor import HeartbeatMonitor
-            orchestrator = RetryOrchestrator(db, queue_service)
-            monitor = HeartbeatMonitor(db, retry_orchestrator=orchestrator)
-            await monitor.run_check()
-        except Exception as e:
-            logger.error(f"Heartbeat check failed: {e}")
-        finally:
-            db.close()
+    # Track consecutive failures per task for alerting
+    _failure_counts: dict[str, int] = {}
+    _ALERT_THRESHOLD = 3
+
+    def _run_with_tracking(task_name: str):
+        """Decorator that tracks consecutive failures and logs critical after threshold."""
+        def decorator(func):
+            async def wrapper():
+                db = SessionLocal()
+                try:
+                    await func(db)
+                    _failure_counts[task_name] = 0
+                except Exception as e:
+                    _failure_counts[task_name] = _failure_counts.get(task_name, 0) + 1
+                    count = _failure_counts[task_name]
+                    if count >= _ALERT_THRESHOLD:
+                        logger.critical(
+                            "%s failed %d consecutive times: %s",
+                            task_name, count, e,
+                        )
+                    else:
+                        logger.error(f"{task_name} failed (attempt {count}): {e}")
+                finally:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+            return wrapper
+        return decorator
+
+    @_run_with_tracking("heartbeat_check")
+    async def heartbeat_check(db):
+        from app.modules.job.orchestrator import RetryOrchestrator
+        from app.modules.job.heartbeat_monitor import HeartbeatMonitor
+        orchestrator = RetryOrchestrator(db, queue_service)
+        monitor = HeartbeatMonitor(db, retry_orchestrator=orchestrator)
+        await monitor.run_check()
+
+    @_run_with_tracking("retention_cleanup")
+    async def retention_cleanup(db):
+        from app.modules.cleanup.service import RetentionCleanupService
+        svc = RetentionCleanupService(db, storage_service)
+        await svc.cleanup_expired()
+
+    @_run_with_tracking("purge_deleted")
+    async def purge_deleted(db):
+        from app.modules.cleanup.service import RetentionCleanupService
+        svc = RetentionCleanupService(db, storage_service)
+        await svc.purge_deleted(older_than_hours=168)
 
     scheduler.add_job(heartbeat_check, 'interval', seconds=60, id='heartbeat_check')
     logger.info("Registered periodic task: heartbeat_check (60s)")
-
-    async def retention_cleanup():
-        db = SessionLocal()
-        try:
-            from app.modules.cleanup.service import RetentionCleanupService
-            svc = RetentionCleanupService(db, storage_service)
-            await svc.cleanup_expired()
-        except Exception as e:
-            logger.error(f"Retention cleanup failed: {e}")
-        finally:
-            db.close()
-
-    async def purge_deleted():
-        db = SessionLocal()
-        try:
-            from app.modules.cleanup.service import RetentionCleanupService
-            svc = RetentionCleanupService(db, storage_service)
-            await svc.purge_deleted(older_than_hours=168)
-        except Exception as e:
-            logger.error(f"Purge deleted failed: {e}")
-        finally:
-            db.close()
-
     scheduler.add_job(retention_cleanup, 'interval', hours=1, id='retention_cleanup')
     logger.info("Registered periodic task: retention_cleanup (1h)")
     scheduler.add_job(purge_deleted, 'interval', hours=24, id='purge_deleted')

@@ -1,6 +1,19 @@
 # Settings from env vars (Pydantic BaseSettings)
 
+import logging
+import warnings
+
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
+
+_INSECURE_SECRET_KEYS = {
+    "your-secret-key-change-in-production",
+    "dev-secret-key-change-in-production",
+    "changeme",
+    "secret",
+    "",
+}
 
 
 class Settings(BaseSettings):
@@ -39,6 +52,28 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+    def validate_secret_key(self) -> None:
+        """Validate secret_key strength at startup. Call during lifespan."""
+        if self.secret_key in _INSECURE_SECRET_KEYS:
+            warnings.warn(
+                "SECRET_KEY is using an insecure default value! "
+                "Set a strong SECRET_KEY (>= 32 chars) in your .env file.",
+                stacklevel=2,
+            )
+            logger.critical(
+                "SECURITY: SECRET_KEY is insecure. "
+                "Set SECRET_KEY to a random string >= 32 characters."
+            )
+        elif len(self.secret_key) < 32:
+            warnings.warn(
+                f"SECRET_KEY is too short ({len(self.secret_key)} chars). "
+                "Use at least 32 characters for production.",
+                stacklevel=2,
+            )
+            logger.warning(
+                "SECRET_KEY is shorter than recommended (< 32 chars)."
+            )
 
 
 settings = Settings()

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react'
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info'
 
@@ -23,17 +23,32 @@ let nextId = 0
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
+  const timeoutIdsRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+
+  useEffect(() => {
+    return () => {
+      timeoutIdsRef.current.forEach((timeoutId) => clearTimeout(timeoutId))
+      timeoutIdsRef.current.clear()
+    }
+  }, [])
 
   const addToast = useCallback((type: ToastType, message: string) => {
     const id = nextId++
     setToasts((prev) => [...prev, { id, type, message }])
-    setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id))
+      timeoutIdsRef.current.delete(id)
     }, 5000)
+    timeoutIdsRef.current.set(id, timeoutId)
   }, [])
 
   const removeToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
+    const timeoutId = timeoutIdsRef.current.get(id)
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+      timeoutIdsRef.current.delete(id)
+    }
   }, [])
 
   return (

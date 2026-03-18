@@ -55,7 +55,7 @@ async def update_job_status(
             service_type.id, service_type.status, job_id,
             extra={"request_id": rid, "job_id": job_id, "service_type": service_type.id},
         )
-        raise HTTPException(status_code=403, detail=f"Service type is {service_type.status}, not APPROVED")
+        raise HTTPException(status_code=403, detail="Service type is not approved")
 
     # Validate status value
     valid_statuses = {s.value for s in JobStatus}

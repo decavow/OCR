@@ -1,5 +1,6 @@
 # NATSQueueService: publish, subscribe, ack, nak
 
+import asyncio
 import json
 import logging
 from typing import Callable, Awaitable, Optional
@@ -12,6 +13,10 @@ from .messages import JobMessage
 from .subjects import get_subject
 
 logger = logging.getLogger(__name__)
+
+# Reconnection constants
+_MAX_RECONNECT_DELAY = 60  # seconds
+_INITIAL_RECONNECT_DELAY = 1  # seconds
 
 
 class NATSQueueService(IQueueService):
@@ -28,15 +33,33 @@ class NATSQueueService(IQueueService):
         return self._connected and self.nc is not None and self.nc.is_connected
 
     async def connect(self) -> None:
-        """Connect to NATS server."""
+        """Connect to NATS server with auto-reconnect callbacks."""
         try:
-            self.nc = await nats.connect(self.url)
+            self.nc = await nats.connect(
+                self.url,
+                reconnected_cb=self._on_reconnected,
+                disconnected_cb=self._on_disconnected,
+                error_cb=self._on_error,
+                max_reconnect_attempts=-1,  # unlimited reconnect
+                reconnect_time_wait=2,  # seconds between attempts
+            )
             self.js = self.nc.jetstream()
             self._connected = True
             logger.info(f"Connected to NATS at {self.url}")
         except Exception as e:
             logger.error(f"Failed to connect to NATS: {e}")
             raise
+
+    async def _on_reconnected(self):
+        logger.info("NATS reconnected")
+        self._connected = True
+
+    async def _on_disconnected(self):
+        logger.warning("NATS disconnected")
+        self._connected = False
+
+    async def _on_error(self, e):
+        logger.error(f"NATS error: {e}")
 
     async def disconnect(self) -> None:
         """Disconnect from NATS server."""
@@ -119,7 +142,11 @@ class NATSQueueService(IQueueService):
         handler: Callable[[JobMessage], Awaitable[None]],
         durable: str = None,
     ) -> None:
-        """Subscribe to subject with handler (pull-based)."""
+        """Subscribe to subject with handler (pull-based).
+
+        Retries on transient errors with exponential backoff instead of
+        breaking out of the loop and silently stopping message consumption.
+        """
         if not self.js:
             raise RuntimeError("Not connected to NATS")
 
@@ -131,10 +158,16 @@ class NATSQueueService(IQueueService):
 
         logger.info(f"Subscribed to {subject}")
 
-        # Start consuming in background
+        consecutive_errors = 0
+        backoff_delay = _INITIAL_RECONNECT_DELAY
+
+        # Start consuming
         while True:
             try:
                 msgs = await sub.fetch(batch=1, timeout=5)
+                consecutive_errors = 0
+                backoff_delay = _INITIAL_RECONNECT_DELAY
+
                 for msg in msgs:
                     try:
                         data = json.loads(msg.data.decode())
@@ -142,13 +175,29 @@ class NATSQueueService(IQueueService):
                         await handler(job_message)
                         await msg.ack()
                     except Exception as e:
-                        logger.error(f"Error processing message: {e}")
-                        await msg.nak()
+                        logger.error(f"Error processing message: {e}", exc_info=True)
+                        try:
+                            await msg.nak()
+                        except Exception as nak_err:
+                            logger.error(f"Failed to NAK message: {nak_err}")
             except nats.errors.TimeoutError:
                 continue
+            except asyncio.CancelledError:
+                logger.info(f"Subscription to {subject} cancelled")
+                raise
             except Exception as e:
-                logger.error(f"Error in subscription loop: {e}")
-                break
+                consecutive_errors += 1
+                logger.error(
+                    f"Error in subscription loop (attempt {consecutive_errors}): {e}",
+                    exc_info=True,
+                )
+                if consecutive_errors >= 10:
+                    logger.critical(
+                        f"Subscription {subject}: {consecutive_errors} consecutive errors, "
+                        "continuing with max backoff"
+                    )
+                await asyncio.sleep(backoff_delay)
+                backoff_delay = min(backoff_delay * 2, _MAX_RECONNECT_DELAY)
 
     async def ack(self, message_id: str) -> None:
         """Acknowledge message (handled inline in subscribe)."""

@@ -22,7 +22,8 @@ export interface UploadResponse {
 export async function uploadFiles(
   files: File[],
   config: UploadConfig,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  signal?: AbortSignal
 ): Promise<UploadResponse> {
   const formData = new FormData()
 
@@ -46,6 +47,7 @@ export async function uploadFiles(
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      signal,
       onUploadProgress: (progressEvent) => {
         if (onProgress && progressEvent.total) {
           const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)

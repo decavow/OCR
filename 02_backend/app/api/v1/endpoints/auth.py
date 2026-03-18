@@ -31,14 +31,14 @@ async def register(
     try:
         user = auth_service.register(data.email, data.password)
         # Auto-login after registration
-        user, session = auth_service.login(data.email, data.password)
+        user, session, raw_token = auth_service.login(data.email, data.password)
         return AuthResponse(
             user=UserResponse.model_validate(user),
-            token=session.token,
+            token=raw_token,
             expires_at=session.expires_at,
         )
     except UserAlreadyExists as e:
-        logger.info("Registration failed - user already exists: %s", data.email)
+        logger.info("Registration failed - user already exists")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -50,14 +50,14 @@ async def login(
     """Login user."""
     auth_service = AuthService(db)
     try:
-        user, session = auth_service.login(data.email, data.password)
+        user, session, raw_token = auth_service.login(data.email, data.password)
         return AuthResponse(
             user=UserResponse.model_validate(user),
-            token=session.token,
+            token=raw_token,
             expires_at=session.expires_at,
         )
     except InvalidCredentials as e:
-        logger.warning("Login failed - invalid credentials: email=%s", data.email)
+        logger.warning("Login failed - invalid credentials")
         raise HTTPException(status_code=401, detail=str(e))
 
 

@@ -8,6 +8,10 @@ from typing import Dict, Any
 from paddleocr import PaddleOCR
 
 from app.engines.base import BaseHandler
+from app.utils.gpu_memory import (
+    set_gpu_memory_fraction, check_gpu_available,
+    log_gpu_memory, cleanup_gpu_memory,
+)
 from .preprocessing import load_image, load_images
 from .postprocessing import extract_results, format_output
 
@@ -33,6 +37,13 @@ class TextRawHandler(BaseHandler):
         self.lang = lang
         logger.info(f"Initializing PaddleOCR v{_PADDLE_OCR_VERSION} (use_gpu={use_gpu}, lang={lang})")
 
+        # GPU memory safety: set fraction limit before model load
+        if use_gpu:
+            set_gpu_memory_fraction()
+            log_gpu_memory("before PaddleOCR init")
+            if not check_gpu_available(min_free_mb=400):
+                logger.warning("Low GPU memory — attempting init anyway")
+
         if _IS_V3:
             # PaddleOCR v3.x: no use_gpu/show_log params
             os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
@@ -40,6 +51,9 @@ class TextRawHandler(BaseHandler):
         else:
             # PaddleOCR v2.x: legacy API
             self.ocr = PaddleOCR(use_gpu=use_gpu, lang=lang, show_log=False)
+
+        if use_gpu:
+            log_gpu_memory("after PaddleOCR init")
 
     def get_engine_info(self) -> Dict[str, Any]:
         return {
@@ -70,7 +84,12 @@ class TextRawHandler(BaseHandler):
             all_text_lines.extend(text_lines)
             all_boxes_data.extend(boxes_data)
 
+            # Free GPU memory after each page
+            cleanup_gpu_memory()
+
         full_text = "\n".join(all_text_lines)
+        if self.use_gpu:
+            log_gpu_memory("after processing all pages")
         return format_output(full_text, all_text_lines, all_boxes_data, output_format)
 
     @staticmethod

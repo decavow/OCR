@@ -172,6 +172,21 @@ def worker_setup(base_url, admin_token):
         }
 
 
+# ─── Keep worker alive: send heartbeat before each test that needs it ──────
+@pytest.fixture(autouse=False)
+def refresh_worker(base_url, worker_setup):
+    """Send a heartbeat to keep the simulated worker ACTIVE."""
+    with httpx.Client(base_url=base_url, timeout=10) as client:
+        client.post(
+            "/internal/heartbeat",
+            json={
+                "instance_id": worker_setup["instance_id"],
+                "status": "idle",
+            },
+            headers={"X-Access-Key": worker_setup["access_key"]},
+        )
+
+
 # ─── Sample files ───────────────────────────────────────────────────────────
 @pytest.fixture
 def sample_png():

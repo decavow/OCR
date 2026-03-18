@@ -38,17 +38,52 @@ class TokenBucket:
 
 
 class RateLimiter:
-    """In-memory rate limiter with per-key token buckets."""
+    """In-memory rate limiter with per-key token buckets.
+
+    Includes TTL-based cleanup to prevent unbounded memory growth
+    from rotating IPs or many unique clients.
+    """
+
+    _MAX_BUCKETS = 10_000
+    _CLEANUP_INTERVAL = 300  # 5 minutes
 
     def __init__(self):
         self._buckets: dict[str, TokenBucket] = {}
+        self._last_cleanup = time.monotonic()
 
     def check(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int, float]:
         """Check rate limit for key. Returns (allowed, remaining, reset_seconds)."""
+        self._maybe_cleanup()
         bucket_key = f"{key}:{limit}:{window_seconds}"
         if bucket_key not in self._buckets:
             self._buckets[bucket_key] = TokenBucket(limit, window_seconds)
         return self._buckets[bucket_key].consume()
+
+    def _maybe_cleanup(self) -> None:
+        """Remove stale buckets periodically to prevent memory leak."""
+        now = time.monotonic()
+        if now - self._last_cleanup < self._CLEANUP_INTERVAL:
+            return
+        self._last_cleanup = now
+
+        # Remove buckets that haven't been used for 2x their window
+        stale_keys = [
+            k for k, b in self._buckets.items()
+            if now - b.last_refill > b.window * 2
+        ]
+        for k in stale_keys:
+            del self._buckets[k]
+
+        # Hard cap: if still over limit, remove oldest
+        if len(self._buckets) > self._MAX_BUCKETS:
+            sorted_keys = sorted(
+                self._buckets, key=lambda k: self._buckets[k].last_refill
+            )
+            for k in sorted_keys[: len(self._buckets) - self._MAX_BUCKETS]:
+                del self._buckets[k]
+
+        if stale_keys:
+            logger.debug(f"Rate limiter cleanup: removed {len(stale_keys)} stale buckets")
 
 
 # Route-specific rate limits: (max_requests, window_seconds)
@@ -59,8 +94,11 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
 }
 DEFAULT_RATE_LIMIT = (60, 60)
 
-# Paths excluded from rate limiting
-EXCLUDED_PREFIXES = ("/api/v1/internal/", "/health")
+# Internal endpoints get higher rate limits instead of being excluded
+INTERNAL_RATE_LIMIT = (300, 60)  # 300 req/min per worker
+
+# Paths excluded from rate limiting (only health)
+EXCLUDED_PREFIXES = ("/health",)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -82,11 +120,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
 
         # Determine rate limit for this path
-        limit, window = DEFAULT_RATE_LIMIT
-        for route_prefix, (route_limit, route_window) in RATE_LIMITS.items():
-            if path.startswith(route_prefix):
-                limit, window = route_limit, route_window
-                break
+        if path.startswith("/api/v1/internal/"):
+            limit, window = INTERNAL_RATE_LIMIT
+        else:
+            limit, window = DEFAULT_RATE_LIMIT
+            for route_prefix, (route_limit, route_window) in RATE_LIMITS.items():
+                if path.startswith(route_prefix):
+                    limit, window = route_limit, route_window
+                    break
 
         # Use client IP as key
         client_ip = request.client.host if request.client else "unknown"

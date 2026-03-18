@@ -45,8 +45,11 @@ class HeartbeatRepository(BaseRepository[Heartbeat]):
         self.db.refresh(heartbeat)
         return heartbeat
 
-    def get_stale_instances(self, timeout_seconds: int = 90) -> List[str]:
-        """Get instance IDs with stale heartbeats (no heartbeat in timeout period)."""
+    def get_stale_instances(self, timeout_seconds: int = 90, limit: int = 500) -> List[str]:
+        """Get instance IDs with stale heartbeats (no heartbeat in timeout period).
+
+        Results are limited to prevent unbounded memory usage with many workers.
+        """
         threshold = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
 
         # Subquery to get latest heartbeat per instance
@@ -58,7 +61,7 @@ class HeartbeatRepository(BaseRepository[Heartbeat]):
         # Find instances with latest heartbeat older than threshold
         stale = self.db.query(subq.c.instance_id).filter(
             subq.c.latest < threshold
-        ).all()
+        ).limit(limit).all()
 
         return [s[0] for s in stale]
 

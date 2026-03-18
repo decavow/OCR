@@ -29,8 +29,12 @@ class AuthService:
         user = self.user_repo.create_user(email, password_hash)
         return user
 
-    def login(self, email: str, password: str) -> tuple[User, UserSession]:
-        """Login user, return user and session."""
+    def login(self, email: str, password: str) -> tuple[User, UserSession, str]:
+        """Login user, return (user, session, raw_token).
+
+        The raw token is returned separately because the session object
+        stores only the hash. The raw token must be sent to the client.
+        """
         # Find user
         user = self.user_repo.get_by_email(email)
         if not user:
@@ -40,12 +44,12 @@ class AuthService:
         if not verify_password(password, user.password_hash):
             raise InvalidCredentials()
 
-        # Create session
-        token = secrets.token_urlsafe(32)
+        # Create session (repo hashes the token before storing)
+        raw_token = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.session_expire_hours)
-        session = self.session_repo.create_session(user.id, token, expires_at)
+        session = self.session_repo.create_session(user.id, raw_token, expires_at)
 
-        return user, session
+        return user, session, raw_token
 
     def logout(self, token: str) -> bool:
         """Logout user, invalidate session."""

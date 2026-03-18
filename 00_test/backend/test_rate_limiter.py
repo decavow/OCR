@@ -122,9 +122,13 @@ class TestRateLimitConfig:
         """RL-008: Default rate limit is 60 per 60s."""
         assert DEFAULT_RATE_LIMIT == (60, 60)
 
-    def test_rl009_internal_excluded(self):
-        """RL-009: /api/v1/internal/ is in excluded prefixes."""
-        assert any(p.startswith("/api/v1/internal") for p in EXCLUDED_PREFIXES)
+    def test_rl009_internal_rate_limited(self):
+        """RL-009: /api/v1/internal/ has its own higher rate limit (not excluded)."""
+        # Internal endpoints should NOT be excluded — they get their own limit
+        assert not any(p.startswith("/api/v1/internal") for p in EXCLUDED_PREFIXES)
+        assert hasattr(rl, "INTERNAL_RATE_LIMIT")
+        limit, window = rl.INTERNAL_RATE_LIMIT
+        assert limit > 60  # Higher than default
 
     def test_rl010_health_excluded(self):
         """RL-010: /health is in excluded prefixes."""

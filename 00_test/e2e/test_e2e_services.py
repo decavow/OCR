@@ -3,6 +3,7 @@
 import pytest
 
 
+@pytest.mark.usefixtures("refresh_worker")
 class TestServiceDiscovery:
     """Service availability E2E tests."""
 

@@ -138,8 +138,8 @@ class ServiceInstanceRepository(BaseRepository[ServiceInstance]):
         return self.update(instance)
 
     def activate(self, instance: ServiceInstance) -> ServiceInstance:
-        """Activate a waiting instance."""
-        if instance.status in (ServiceInstanceStatus.WAITING, ServiceInstanceStatus.DRAINING):
+        """Activate a waiting, draining, or dead instance."""
+        if instance.status in (ServiceInstanceStatus.WAITING, ServiceInstanceStatus.DRAINING, ServiceInstanceStatus.DEAD):
             instance.status = ServiceInstanceStatus.ACTIVE
             instance.last_heartbeat_at = datetime.now(timezone.utc)
             return self.update(instance)

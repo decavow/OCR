@@ -121,6 +121,9 @@ class JobService:
         """Update job status + trigger request status recalculation.
 
         Called by internal endpoint (worker callback).
+        All DB operations are wrapped in a savepoint to ensure atomicity —
+        either all updates (job status, request counters, request status)
+        succeed together, or none do.
         """
         job = self.job_repo.get_active(job_id)
         if not job:
@@ -156,9 +159,10 @@ class JobService:
             # 4. Recalculate request status
             self._recalculate_request_status(request)
 
-            # 5. If FAILED + retriable → delegate to RetryOrchestrator (M3)
-            if status == "FAILED" and retriable:
-                await self._handle_retry(job, error, retriable)
+        # 5. If FAILED + retriable → delegate to RetryOrchestrator (M3)
+        # Done outside savepoint since it involves queue publish (side effect)
+        if request and status == "FAILED" and retriable:
+            await self._handle_retry(job, error, retriable)
 
         return job
 

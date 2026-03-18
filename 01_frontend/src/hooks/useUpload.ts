@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { UploadFile, UploadConfig } from '../types'
 import { uploadFiles, UploadResponse } from '../api/upload'
 
@@ -8,6 +8,13 @@ export function useUpload() {
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort()
+    }
+  }, [])
 
   const addFiles = (newFiles: File[]) => {
     const uploadFiles: UploadFile[] = newFiles.map((file) => ({
@@ -37,8 +44,9 @@ export function useUpload() {
     )
 
     try {
+      abortControllerRef.current = new AbortController()
       const rawFiles = files.map((f) => f.file)
-      const response = await uploadFiles(rawFiles, config, setProgress)
+      const response = await uploadFiles(rawFiles, config, setProgress, abortControllerRef.current.signal)
 
       // Update all files to completed
       setFiles((prev) =>
@@ -60,7 +68,13 @@ export function useUpload() {
     }
   }
 
+  const cancel = () => {
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+  }
+
   const reset = () => {
+    cancel()
     setFiles([])
     setProgress(0)
     setError(null)
@@ -75,6 +89,7 @@ export function useUpload() {
     addFiles,
     removeFile,
     upload,
+    cancel,
     reset,
   }
 }

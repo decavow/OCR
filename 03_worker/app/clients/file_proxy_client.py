@@ -11,6 +11,12 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Timeout scales: large files need more time
+_DOWNLOAD_TIMEOUT = httpx.Timeout(300.0, connect=10.0)  # 5 min for large downloads
+_UPLOAD_TIMEOUT = httpx.Timeout(300.0, connect=10.0)    # 5 min for large uploads
+# Max file size we'll process in memory (500 MB)
+_MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
+
 
 class FileProxyClient:
     """HTTP client for file proxy endpoints."""
@@ -18,7 +24,6 @@ class FileProxyClient:
     def __init__(self):
         self.base_url = settings.file_proxy_url
         self._access_key: Optional[str] = settings.worker_access_key
-        self.timeout = httpx.Timeout(60.0, connect=10.0)
 
     def set_access_key(self, key: str) -> None:
         """Set access key after approval."""
@@ -45,7 +50,7 @@ class FileProxyClient:
 
         logger.info(f"Downloading file {file_id} for job {job_id}")
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
             response = await client.post(
                 f"{self.base_url}/download",
                 json={"job_id": job_id, "file_id": file_id},
@@ -53,13 +58,22 @@ class FileProxyClient:
             )
             response.raise_for_status()
 
+            content = response.content
+            content_len = len(content)
+
+            if content_len > _MAX_FILE_SIZE_BYTES:
+                raise RuntimeError(
+                    f"File too large ({content_len} bytes, max {_MAX_FILE_SIZE_BYTES}). "
+                    "Reduce file size or increase worker memory."
+                )
+
             # Extract metadata from headers
             content_type = response.headers.get("X-Content-Type", "application/octet-stream")
             filename = unquote(response.headers.get("X-File-Name", "unknown"))
 
-            logger.debug(f"Downloaded {len(response.content)} bytes, type={content_type}")
+            logger.debug(f"Downloaded {content_len} bytes, type={content_type}")
 
-            return response.content, content_type, filename
+            return content, content_type, filename
 
     async def upload(
         self,
@@ -85,7 +99,7 @@ class FileProxyClient:
 
         logger.info(f"Uploading result for job {job_id}, size={len(content)}")
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=_UPLOAD_TIMEOUT) as client:
             response = await client.post(
                 f"{self.base_url}/upload",
                 json={

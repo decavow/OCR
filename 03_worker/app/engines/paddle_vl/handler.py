@@ -7,6 +7,10 @@ import os
 import numpy as np
 
 from app.engines.base import BaseHandler
+from app.utils.gpu_memory import (
+    set_gpu_memory_fraction, check_gpu_available,
+    log_gpu_memory, cleanup_gpu_memory,
+)
 from .preprocessing import load_images, prepare_image
 from .postprocessing import (
     extract_regions,
@@ -43,6 +47,14 @@ class StructuredExtractHandler(BaseHandler):
         self.lang = lang
         logger.info(f"Initializing PaddleOCR-VL v{_PADDLE_OCR_VERSION} (use_gpu={use_gpu}, lang={lang})")
 
+        # GPU memory safety: set fraction limit before model load
+        # PPStructureV3 loads multiple models (layout + table + OCR) — needs more memory
+        if use_gpu:
+            set_gpu_memory_fraction()
+            log_gpu_memory("before PPStructure init")
+            if not check_gpu_available(min_free_mb=800):
+                logger.warning("Low GPU memory for PPStructure — attempting init anyway")
+
         if _IS_V3:
             os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
             from paddleocr import PPStructureV3
@@ -55,6 +67,9 @@ class StructuredExtractHandler(BaseHandler):
                 layout=True, table=True, ocr=True, show_log=False,
             )
             self._is_v3 = False
+
+        if use_gpu:
+            log_gpu_memory("after PPStructure init")
 
         # Lazy-init fallback OCR engine
         self._ocr_engine = None
@@ -131,13 +146,11 @@ class StructuredExtractHandler(BaseHandler):
 
             all_pages.append(page_result)
 
-            # Free GPU memory between pages for multi-page docs
-            if len(images) > 1:
-                try:
-                    import paddle
-                    paddle.device.cuda.empty_cache()
-                except Exception:
-                    pass
+            # Free GPU memory after each page to prevent accumulation
+            cleanup_gpu_memory()
+
+        if self.use_gpu:
+            log_gpu_memory("after structured extraction")
 
         quality_ok = assess_result_quality(all_pages)
 
@@ -160,6 +173,8 @@ class StructuredExtractHandler(BaseHandler):
                 all_pages.append(page_result)
 
         dbg.save_pipeline_summary()
+        # Final cleanup after all processing
+        cleanup_gpu_memory()
         return format_structured_output(all_pages, output_format)
 
     def _extract_v3_structured(self, results: list, page_idx: int) -> Dict:

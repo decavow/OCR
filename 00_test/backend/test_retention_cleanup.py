@@ -165,8 +165,8 @@ class TestCleanupExpired:
         svc_no_storage.file_repo.soft_delete.assert_called_once_with(file)
 
     @pytest.mark.asyncio
-    async def test_rc006_continues_on_move_error(self, svc):
-        """RC-006: Continues processing other files if move fails."""
+    async def test_rc006_continues_on_move_error_skips_request_softdelete(self, svc):
+        """RC-006: Continues processing files but skips request soft-delete on failure."""
         req = make_request(request_id="req-1")
         files = [
             make_file(file_id="f1", object_key="u1/r1/f1/a.png"),
@@ -181,6 +181,9 @@ class TestCleanupExpired:
         result = await svc.cleanup_expired()
         # Only the second file gets soft-deleted (first had a move error)
         assert result["files_moved"] == 1
+        # Request must NOT be soft-deleted when files failed to move
+        assert result["expired_requests"] == 0
+        svc.request_repo.soft_delete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rc007_handles_multiple_expired_requests(self, svc):
@@ -231,8 +234,8 @@ class TestPurgeDeleted:
         svc.request_repo.hard_delete.assert_called_once_with(req)
 
     @pytest.mark.asyncio
-    async def test_rc010_continues_on_remove_error(self, svc):
-        """RC-010: Continues if storage removal fails for one file."""
+    async def test_rc010_skips_hard_delete_on_remove_error(self, svc):
+        """RC-010: Skips hard-delete if any file removal fails (prevents data loss)."""
         req = make_request(request_id="req-1")
         files = [
             make_file(file_id="f1", object_key="a.png"),
@@ -246,8 +249,9 @@ class TestPurgeDeleted:
         result = await svc.purge_deleted()
         # First fails, second succeeds
         assert result["files_removed"] == 1
-        # Hard delete still happens
-        svc.request_repo.hard_delete.assert_called_once_with(req)
+        assert result["purged_requests"] == 0
+        # Hard-delete must NOT happen when files failed to remove
+        svc.request_repo.hard_delete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rc011_uses_default_retention_hours(self, svc):

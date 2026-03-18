@@ -64,8 +64,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }
 
   const logout = async () => {
-    await authApi.logout()
-    setUser(null)
+    try {
+      await authApi.logout()
+    } catch {
+      // Always clear local state even if API call fails
+    } finally {
+      setUser(null)
+      setError(null)
+    }
   }
 
   return (

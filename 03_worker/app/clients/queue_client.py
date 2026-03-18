@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -12,6 +13,9 @@ from nats.js.api import ConsumerConfig, DeliverPolicy, AckPolicy
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Pending message TTL: auto-cleanup entries older than this (seconds)
+_PENDING_MSG_TTL = 3600  # 1 hour
 
 
 @dataclass
@@ -36,12 +40,27 @@ class QueueClient:
         self.nc = None
         self.js: JetStreamContext = None
         self.subscription = None
-        self._pending_messages: Dict[str, Any] = {}  # msg_id -> nats message
+        self._pending_messages: Dict[str, tuple] = {}  # msg_id -> (nats_msg, timestamp)
+
+    def _cleanup_stale_pending(self) -> None:
+        """Remove pending messages older than TTL to prevent memory leak."""
+        now = time.monotonic()
+        stale = [
+            mid for mid, (_, ts) in self._pending_messages.items()
+            if now - ts > _PENDING_MSG_TTL
+        ]
+        for mid in stale:
+            self._pending_messages.pop(mid, None)
+            logger.warning(f"Cleaned up stale pending message: {mid}")
 
     async def connect(self) -> None:
         """Connect to NATS and create pull subscription."""
         logger.info(f"Connecting to NATS at {settings.nats_url}")
-        self.nc = await nats.connect(settings.nats_url)
+        self.nc = await nats.connect(
+            settings.nats_url,
+            max_reconnect_attempts=-1,
+            reconnect_time_wait=2,
+        )
         self.js = self.nc.jetstream()
 
         # Use service TYPE (not instance ID) for consumer name
@@ -90,8 +109,12 @@ class QueueClient:
             # Generate unique message id
             msg_id = f"{msg.metadata.sequence.stream}_{msg.metadata.sequence.consumer}"
 
-            # Store message for ack/nak
-            self._pending_messages[msg_id] = msg
+            # Store message for ack/nak (with timestamp for TTL cleanup)
+            self._pending_messages[msg_id] = (msg, time.monotonic())
+
+            # Periodically cleanup stale entries
+            if len(self._pending_messages) > 10:
+                self._cleanup_stale_pending()
 
             logger.info(f"Pulled job {data.get('job_id')} from queue")
 
@@ -116,8 +139,9 @@ class QueueClient:
 
     async def ack(self, msg_id: str) -> None:
         """Acknowledge message as successfully processed."""
-        msg = self._pending_messages.pop(msg_id, None)
-        if msg:
+        entry = self._pending_messages.pop(msg_id, None)
+        if entry:
+            msg, _ = entry
             await msg.ack()
             logger.debug(f"Acked message {msg_id}")
 
@@ -129,8 +153,9 @@ class QueueClient:
             msg_id: Message identifier
             delay: Optional delay in seconds before redelivery
         """
-        msg = self._pending_messages.pop(msg_id, None)
-        if msg:
+        entry = self._pending_messages.pop(msg_id, None)
+        if entry:
+            msg, _ = entry
             if delay:
                 await msg.nak(delay=delay)
             else:
@@ -142,7 +167,8 @@ class QueueClient:
         Terminate message - do not redeliver.
         Use for permanently failed jobs.
         """
-        msg = self._pending_messages.pop(msg_id, None)
-        if msg:
+        entry = self._pending_messages.pop(msg_id, None)
+        if entry:
+            msg, _ = entry
             await msg.term()
             logger.debug(f"Terminated message {msg_id}")

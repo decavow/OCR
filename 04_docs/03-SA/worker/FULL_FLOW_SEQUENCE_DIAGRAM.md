@@ -80,10 +80,10 @@ sequenceDiagram
     DZ->>UC: onFilesSelected(files)
 
     User->>UC: Chọn cấu hình OCR
-    Note right of UC: • method: ocr_text_raw / structured_extract<br/>• tier: 0, 1, 2<br/>• output_format: txt / json / md<br/>• retention_hours: 1-720h
+    Note right of UC: • method: ocr_paddle_text / structured_extract<br/>• tier: 0, 1, 2<br/>• output_format: txt / json / md / html<br/>• retention_hours: 1-720h
 
     UC->>API: uploadFiles(files, config, onProgress)
-    API->>EP: POST /upload?method=ocr_text_raw&tier=0&output_format=txt&retention_hours=168<br/>Content-Type: multipart/form-data<br/>Authorization: Bearer {token}<br/>Body: files[]
+    API->>EP: POST /upload?method=ocr_paddle_text&tier=0&output_format=txt&retention_hours=168<br/>Content-Type: multipart/form-data<br/>Authorization: Bearer {token}<br/>Body: files[]
 
     Note over EP,NATS: === Backend: Validate & Store ===
 
@@ -129,7 +129,7 @@ sequenceDiagram
         US->>Repo: JobRepository.update_status()
         Repo->>DB: UPDATE Job SET status=QUEUED
 
-        US->>NATS: publish(subject="ocr.ocr_text_raw.tier0", message=JobMessage)
+        US->>NATS: publish(subject="ocr.ocr_paddle_text.tier0", message=JobMessage)
         Note right of NATS: JobMessage:<br/>{job_id, file_id, request_id,<br/>method, tier, output_format,<br/>object_key}
         NATS-->>US: publish ACK (JetStream durability)
     end
@@ -176,7 +176,7 @@ sequenceDiagram
 
     Worker->>Orch: register()
     Orch->>RegEP: POST /internal/register
-    Note right of Orch: Body:<br/>{service_type: "ocr-text-tier0",<br/>instance_id: "ocr-text-tier0-abc123",<br/>allowed_methods: ["ocr_text_raw"],<br/>allowed_tiers: [0],<br/>engine_info: {engine, version, lang},<br/>supported_output_formats: ["txt","json"]}
+    Note right of Orch: Body:<br/>{service_type: "ocr-text-tier0",<br/>instance_id: "ocr-text-tier0-abc123",<br/>allowed_methods: ["ocr_paddle_text"],<br/>allowed_tiers: [0],<br/>engine_info: {engine, version, lang},<br/>supported_output_formats: ["txt","json"]}
 
     RegEP->>DB: Tìm hoặc tạo ServiceType
     RegEP->>DB: Tạo ServiceInstance
@@ -191,20 +191,21 @@ sequenceDiagram
         RegEP-->>Orch: {type_status: "PENDING", access_key: null}
         Orch-->>Worker: approved = false
     else ServiceType REJECTED
-        RegEP-->>Orch: 403 Rejected
-        Orch-->>Worker: REJECTED → shutdown
-        Worker->>Main: exit
+        RegEP-->>Orch: {type_status: "REJECTED"}
+        Orch-->>Worker: REJECTED → set shutdown flag
     end
 
-    Note over Worker,NATS: === Connect NATS ===
+    Note over Worker,NATS: === Connect NATS (luôn chạy, kể cả chưa approved) ===
 
     Worker->>Queue: connect()
     Queue->>NATS: nats.connect(nats_url)
-    Queue->>NATS: Pull subscription<br/>stream="OCR_JOBS"<br/>subject="ocr.ocr_text_raw.tier0"<br/>consumer=service_type (shared, durable)
+    Queue->>NATS: Pull subscription<br/>stream="OCR_JOBS"<br/>subject="ocr.ocr_paddle_text.tier0"<br/>consumer=service_type (shared, durable)
     NATS-->>Queue: subscription ready
 
     Note over Worker,NATS: === Start Heartbeat ===
 
+    Worker->>HB: set_state(worker_state)
+    Worker->>HB: set_action_callback(_handle_heartbeat_action)
     Worker->>HB: start()
 
     loop Mỗi 30 giây
@@ -214,18 +215,23 @@ sequenceDiagram
         HBEP->>DB: Update instance.last_heartbeat
         HBEP->>DB: Check ServiceType.status
 
-        alt type APPROVED + instance WAITING
+        alt action == "continue" (type APPROVED, instance ACTIVE)
+            HBEP-->>HB: {action: "continue"}
+            HB-->>Worker: _re_register_attempts = 0
+        else action == "approved" (first-time approval)
             HBEP-->>HB: {action: "approved", access_key: "xxx"}
             HB-->>Worker: _handle_heartbeat_action("approved")
             Worker->>Worker: Set access_key, is_approved = true
-        else type APPROVED + instance ACTIVE
-            HBEP-->>HB: {action: "continue"}
-        else type DISABLED
+        else action == "re_register" (instance lost, e.g. backend restart)
+            HBEP-->>HB: {action: "re_register"}
+            HB-->>Worker: _retry_registration()
+            Note right of Worker: Exponential backoff: 0s, 5s, 10s, 20s, 40s... max 60s
+        else action == "drain" (type DISABLED)
             HBEP-->>HB: {action: "drain"}
             HB-->>Worker: is_draining = true (hoàn thành job hiện tại rồi dừng)
-        else type REJECTED
-            HBEP-->>HB: {action: "shutdown"}
-            HB-->>Worker: deregister + exit
+        else action == "shutdown" (type REJECTED)
+            HBEP-->>HB: {action: "shutdown", rejection_reason: "..."}
+            HB-->>Worker: deregister + set shutdown flag
         end
     end
 ```
@@ -277,12 +283,20 @@ sequenceDiagram
 
     Worker->>Orch: update_status(job_id, "PROCESSING")
     Orch->>StatusEP: PATCH /internal/jobs/{job_id}/status<br/>X-Access-Key: xxx<br/>{status: "PROCESSING"}
-    StatusEP->>JobSvc: update_job_status()
-    JobSvc->>DB: UPDATE Job SET status=PROCESSING, started_at=now, worker_id=instance_id
-    DB-->>JobSvc: OK
-    JobSvc-->>StatusEP: OK
-    StatusEP-->>Orch: 200
-    Orch-->>Worker: OK
+
+    alt 404 — Job not found (stale message)
+        StatusEP-->>Orch: 404
+        Orch-->>Worker: HTTPStatusError(404)
+        Worker->>Queue: term(msg_id)
+        Note right of Queue: Stale message → loại bỏ, return
+    else 200 OK
+        StatusEP->>JobSvc: update_job_status()
+        JobSvc->>DB: UPDATE Job SET status=PROCESSING, started_at=now, worker_id=instance_id
+        DB-->>JobSvc: OK
+        JobSvc-->>StatusEP: OK
+        StatusEP-->>Orch: 200
+        Orch-->>Worker: OK
+    end
 
     Note over Worker,DB: === Download file gốc từ MinIO ===
 
@@ -297,7 +311,7 @@ sequenceDiagram
     MinIO-->>FPSvc: file_bytes
     FPSvc-->>FPEP: file_bytes + metadata
     FPEP-->>FPClient: Response body=file_bytes<br/>Headers: X-Content-Type, X-File-Name
-    FPClient-->>Worker: file_bytes
+    FPClient-->>Worker: (file_bytes, content_type, filename)
 
     Note over Worker,DB: === OCR Processing ===
 
@@ -306,15 +320,15 @@ sequenceDiagram
 
     Proc->>Handler: process(file_bytes, output_format)
 
-    Note right of Handler: Preprocessing:<br/>• load_image/load_images<br/>• PDF → images (pdf2image, 300 DPI)<br/>• Upscale nếu cần (paddle_vl)<br/>• Convert RGB → numpy array
+    Note right of Handler: Preprocessing:<br/>• load_images (multi-page support)<br/>• PDF → images (pypdfium2 200 DPI / pdf2image 200 DPI)<br/>• Upscale/downscale nếu cần (paddle_vl only)<br/>• Convert RGB → numpy array
 
     Handler->>Handler: Preprocessing
 
-    Note right of Handler: Inference:<br/>• PaddleOCR.ocr() — text detection + recognition<br/>• pytesseract.image_to_data() — word-level OCR<br/>• PPStructure() — layout + table + text
+    Note right of Handler: Inference:<br/>• PaddleOCR v2: ocr(img, cls=True)<br/>• PaddleOCR v3: predict(img)<br/>• PPStructure v2: engine(img)<br/>• PPStructureV3: engine.predict(img)<br/>• pytesseract: image_to_data()
 
     Handler->>Handler: Inference (OCR Engine)
 
-    Note right of Handler: Postprocessing:<br/>• Extract text lines, boxes, confidence<br/>• Format output (json/txt/md)<br/>• Encode to UTF-8 bytes
+    Note right of Handler: Postprocessing:<br/>• Extract text lines, boxes, confidence<br/>• Format output (json/txt/md/html)<br/>• Encode to UTF-8 bytes
 
     Handler->>Handler: Postprocessing
 
@@ -323,13 +337,16 @@ sequenceDiagram
 
     Note over Worker,DB: === Upload kết quả lên MinIO ===
 
+    Worker->>Worker: Determine content_type theo output_format
+    Note right of Worker: json→"application/json"<br/>md→"text/markdown"<br/>html→"text/html"<br/>else→"text/plain"
+
     Worker->>FPClient: upload(job_id, file_id, result_bytes, content_type)
     FPClient->>FPClient: base64.b64encode(result_bytes)
-    FPClient->>FPEP: POST /internal/file-proxy/upload<br/>X-Access-Key: xxx<br/>{job_id, file_id, content: base64, content_type: "text/plain"}
+    FPClient->>FPEP: POST /internal/file-proxy/upload<br/>X-Access-Key: xxx<br/>{job_id, file_id, content: base64, content_type}
 
     FPEP->>FPSvc: upload_from_worker(job_id, file_id, content, access_key)
     FPSvc->>FPSvc: Verify access_key + ACL
-    FPSvc->>FPSvc: Generate result_key: users/{uid}/{req_id}/{file_id}/result.txt
+    FPSvc->>FPSvc: Generate result_key: users/{uid}/{req_id}/{file_id}/result.{ext}
     FPSvc->>MinIO: upload(bucket=results, key=result_key, data=decoded_bytes)
     MinIO-->>FPSvc: upload OK
     FPSvc->>DB: UPDATE Job SET result_path=result_key
@@ -339,8 +356,9 @@ sequenceDiagram
 
     Note over Worker,DB: === Cập nhật COMPLETED ===
 
-    Worker->>Orch: update_status(job_id, "COMPLETED", engine_version)
-    Orch->>StatusEP: PATCH /internal/jobs/{job_id}/status<br/>{status: "COMPLETED", engine_version: "paddleocr 2.7.3"}
+    Worker->>Worker: engine_info = processor.get_engine_info()
+    Worker->>Orch: update_status(job_id, "COMPLETED", engine_version="{engine} {version}")
+    Orch->>StatusEP: PATCH /internal/jobs/{job_id}/status<br/>{status: "COMPLETED", engine_version: "paddleocr X.Y.Z"}
 
     StatusEP->>JobSvc: update_job_status()
     JobSvc->>JobSvc: Validate transition: PROCESSING → COMPLETED ✓
@@ -359,8 +377,11 @@ sequenceDiagram
     Queue->>NATS: ACK message
     NATS-->>Queue: confirmed (message removed from queue)
 
+    Note over Worker,DB: === Cleanup (finally block — luôn chạy) ===
+
     Worker->>State: end_job()
-    State-->>Worker: status="idle", files_completed++
+    State-->>Worker: current_job_id=None, status="idle", files_completed++
+    Note right of State: end_job() chạy cả khi success và error
 ```
 
 ---
@@ -373,7 +394,6 @@ sequenceDiagram
     autonumber
     participant Worker as OCRWorker
     participant State as WorkerState
-    participant Classify as classify_error()
     participant Orch as OrchestratorClient
     participant StatusEP as Backend API
     participant JobSvc as JobService
@@ -384,12 +404,12 @@ sequenceDiagram
 
     Note over Worker,DB: === Lỗi xảy ra trong process_job() ===
 
-    Worker->>Classify: classify_error(exception)
+    Note right of Worker: Worker dùng try/except bắt exception types:<br/>• RetriableError → retriable=true<br/>• PermanentError → retriable=false<br/>• Exception (khác) → retriable=true (conservative)
 
     alt RetriableError (timeout, connection, download/upload fail)
-        Classify-->>Worker: (message, is_retriable=true)
+        Worker->>Worker: catch RetriableError
 
-        Worker->>Orch: update_status(job_id, "FAILED", error=message, retriable=true)
+        Worker->>Orch: update_status(job_id, "FAILED", error=str(e), retriable=true)
         Orch->>StatusEP: PATCH /internal/jobs/{id}/status<br/>{status: "FAILED", error, retriable: true}
         StatusEP->>JobSvc: update_job_status()
         JobSvc->>DB: UPDATE Job SET status=FAILED
@@ -413,9 +433,9 @@ sequenceDiagram
         Note right of NATS: Message available lại sau 5s
 
     else PermanentError (ảnh lỗi, PDF corrupt, format không hỗ trợ)
-        Classify-->>Worker: (message, is_retriable=false)
+        Worker->>Worker: catch PermanentError
 
-        Worker->>Orch: update_status(job_id, "FAILED", error=message, retriable=false)
+        Worker->>Orch: update_status(job_id, "FAILED", error=str(e), retriable=false)
         Orch->>StatusEP: PATCH {status: "FAILED", retriable: false}
         StatusEP->>JobSvc: update_job_status()
         JobSvc->>RetryOrch: handle_failure(job, error, retriable=false)
@@ -427,13 +447,26 @@ sequenceDiagram
         Queue->>NATS: TERM message
         Note right of NATS: Message bị loại bỏ vĩnh viễn khỏi queue
 
-    else Job not found (404 from backend)
+    else Unexpected Exception (bất kỳ lỗi khác)
+        Worker->>Worker: catch Exception (treated as retriable)
+        Worker->>Orch: update_status(job_id, "FAILED", error=str(e), retriable=true)
+        Worker->>Queue: nak(msg_id, delay=5s)
+
+    else 404 khi report FAILED to backend
         Worker->>Queue: term(msg_id)
-        Note right of Queue: Stale job message → loại bỏ, không retry
+        Note right of Queue: Backend không biết job → loại bỏ, không retry
+
+    else Job not found (404 khi report PROCESSING)
+        Worker->>Queue: term(msg_id)
+        Note right of Queue: Stale job message → loại bỏ, return sớm
     end
 
+    Note over Worker,DB: === Cleanup (finally block — luôn chạy) ===
+
+    Worker->>State: end_job()
+    State-->>Worker: current_job_id=None, status="idle", files_completed++
     Worker->>State: record_error()
-    State-->>Worker: error_count++, status="idle"
+    State-->>Worker: error_count++
 
     Note over Worker,DB: === Request Status Recalculation ===
     Note right of DB: State Machine cho Request:<br/>• Còn job PROCESSING/QUEUED → PROCESSING<br/>• Tất cả COMPLETED → COMPLETED<br/>• Tất cả FAILED/DEAD_LETTER → FAILED<br/>• Tất cả CANCELLED → CANCELLED<br/>• Mix terminal states → PARTIAL_SUCCESS
@@ -538,18 +571,21 @@ sequenceDiagram
     Shutdown-->>Worker: Main loop kiểm tra shutdown flag
 
     Worker->>Worker: Hoàn thành job hiện tại (nếu có)
+
+    Note over Worker,BE: === worker.stop() ===
+
     Worker->>HB: stop()
-    HB->>HB: Cancel heartbeat loop
+    HB->>HB: Cancel heartbeat loop task
 
     Worker->>Queue: disconnect()
-    Queue->>Queue: Close NATS connection
+    Queue->>Queue: nc.drain() → Close NATS connection
 
-    Worker->>Orch: deregister()
+    Worker->>Orch: deregister(instance_id)
     Orch->>BE: POST /internal/deregister<br/>{instance_id: "ocr-text-tier0-abc123"}
     BE->>BE: Update ServiceInstance status=DEREGISTERED
     BE-->>Orch: OK
 
-    Worker->>Worker: exit(0)
+    Worker->>Worker: Log "Worker stopped"
 
     Note over Signal,BE: === Heartbeat Monitor (Backend side) ===
 
@@ -605,14 +641,18 @@ Request States:
 
 | Exception | Loại | Worker Action | Backend Action |
 |-----------|------|---------------|----------------|
+| `RetriableError` | Retriable | NAK (delay 5s) | retry_count++ → re-queue |
 | `ConnectionError` | Retriable | NAK (delay 5s) | retry_count++ → re-queue |
 | `TimeoutError` | Retriable | NAK (delay 5s) | retry_count++ → re-queue |
 | `DownloadError` | Retriable | NAK (delay 5s) | retry_count++ → re-queue |
 | `UploadError` | Retriable | NAK (delay 5s) | retry_count++ → re-queue |
+| `PermanentError` | Permanent | TERM | → DEAD_LETTER |
 | `InvalidImageError` | Permanent | TERM | → DEAD_LETTER |
 | `PDFSyntaxError` | Permanent | TERM | → DEAD_LETTER |
 | `ValueError` | Permanent | TERM | → DEAD_LETTER |
+| Unexpected Exception | Retriable | NAK (delay 5s) | retry_count++ → re-queue |
 | Max retries exceeded | — | — | → DEAD_LETTER |
+| 404 Job not found | — | TERM | — |
 
 ### Security & Access Control
 

@@ -83,7 +83,7 @@ class TestCheckDatabase:
         result = await healthy_svc.check_database()
         assert result["status"] == "healthy"
         assert "latency_ms" in result
-        assert result["latency_ms"] >= 0
+        assert 0 <= result["latency_ms"] < 5000  # Should complete within 5s
 
     @pytest.mark.asyncio
     async def test_hs002_unhealthy_database(self, unhealthy_svc):

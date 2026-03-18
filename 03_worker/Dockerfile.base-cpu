@@ -28,11 +28,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy shared application code
 COPY app/ ./app/
 
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser && \
+    chown -R appuser:appuser /app
+
 # Common environment variables (can be overridden by per-worker .env)
 ENV OCR_LANG=en
 ENV LOG_LEVEL=INFO
 ENV NATS_URL=nats://ocr-nats:4222
 ENV FILE_PROXY_URL=http://ocr-backend:8000/api/v1/internal/file-proxy
 ENV ORCHESTRATOR_URL=http://ocr-backend:8000/api/v1/internal
+
+USER appuser
 
 CMD ["python", "-m", "app.main"]

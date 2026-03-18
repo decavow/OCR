@@ -188,7 +188,7 @@ class TestLogin:
     """AU-003 to AU-005: User login."""
 
     def test_au003_login_valid_credentials(self, svc):
-        """AU-003: Login with correct email+password returns (user, session)."""
+        """AU-003: Login with correct email+password returns (user, session, raw_token)."""
         user = _make_user(email="user@test.com", password="correctpass")
         session = _make_session(user_id=user.id)
         svc.user_repo.get_by_email.return_value = user
@@ -198,6 +198,8 @@ class TestLogin:
 
         assert result[0] is user
         assert result[1] is session
+        assert isinstance(result[2], str)  # raw_token returned
+        assert len(result[2]) > 0
         svc.session_repo.create_session.assert_called_once()
 
     def test_au004_login_wrong_password_raises(self, svc):

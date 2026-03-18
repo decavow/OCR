@@ -69,8 +69,8 @@ async def receive_heartbeat(
 
     # Validate access key for APPROVED types
     if service_type.status == ServiceTypeStatus.APPROVED:
-        # If instance should have key (not first heartbeat after approval)
-        if instance.status in (ServiceInstanceStatus.ACTIVE, ServiceInstanceStatus.PROCESSING):
+        # Require key for active, processing, or dead instances (dead may re-activate)
+        if instance.status in (ServiceInstanceStatus.ACTIVE, ServiceInstanceStatus.PROCESSING, ServiceInstanceStatus.DEAD):
             if not x_access_key:
                 logger.warning(
                     "Missing access key for instance %s (type=%s)",
@@ -126,6 +126,16 @@ async def receive_heartbeat(
             service_instance_repo.activate(instance)
             logger.info(
                 "Instance %s approved, sending access key (type=%s)",
+                data.instance_id, instance.service_type_id,
+                extra={"request_id": rid, "instance_id": data.instance_id, "service_type": instance.service_type_id},
+            )
+        elif instance.status == ServiceInstanceStatus.DEAD:
+            # Instance was marked dead (heartbeat timeout) but is back — re-activate
+            action = "approved"
+            access_key = service_type.access_key
+            service_instance_repo.activate(instance)
+            logger.info(
+                "Instance %s re-activated from DEAD (type=%s)",
                 data.instance_id, instance.service_type_id,
                 extra={"request_id": rid, "instance_id": data.instance_id, "service_type": instance.service_type_id},
             )

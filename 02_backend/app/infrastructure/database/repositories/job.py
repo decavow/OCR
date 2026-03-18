@@ -184,11 +184,13 @@ class JobRepository(BaseRepository[Job]):
         ]
 
     def cancel_jobs(self, jobs: List[Job]) -> int:
-        """Cancel multiple jobs. Returns cancelled count."""
+        """Cancel multiple jobs atomically. Returns cancelled count."""
         count = 0
         for job in jobs:
+            # Refresh to get latest status (avoid stale state)
+            self.db.refresh(job)
             if job.status == "QUEUED":
                 job.status = "CANCELLED"
                 count += 1
-        self.db.commit()
+        self.db.flush()
         return count

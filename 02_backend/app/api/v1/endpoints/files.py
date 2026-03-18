@@ -60,6 +60,10 @@ async def get_original_url(
     if not request or request.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Check if request has expired
+    if request.expires_at and datetime.now(timezone.utc) > request.expires_at:
+        raise HTTPException(status_code=410, detail="File has expired")
+
     # Generate presigned URL
     expires = timedelta(hours=1)
     url = await storage.get_presigned_url(
@@ -96,16 +100,17 @@ async def get_result_url(
     if not request or request.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Check if request has expired
+    if request.expires_at and datetime.now(timezone.utc) > request.expires_at:
+        raise HTTPException(status_code=410, detail="File has expired")
+
     # Get job for this file to find result_path
     job = job_repo.get_by_file(file_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found for file")
 
     if job.status != "COMPLETED":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Job is not completed. Current status: {job.status}"
-        )
+        raise HTTPException(status_code=400, detail="Job is not yet completed")
 
     if not job.result_path:
         raise HTTPException(status_code=404, detail="Result not found")

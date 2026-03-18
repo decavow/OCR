@@ -33,11 +33,23 @@ POLL_INTERVAL = 3
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def get_token(client: httpx.Client, email: str, password: str) -> str:
-    resp = client.post("/auth/login", json={"email": email, "password": password})
-    if resp.status_code == 200:
-        return resp.json()["token"]
-    # Try register
-    resp = client.post("/auth/register", json={"email": email, "password": password})
+    for attempt in range(5):
+        resp = client.post("/auth/login", json={"email": email, "password": password})
+        if resp.status_code == 200:
+            return resp.json()["token"]
+        if resp.status_code == 429:
+            time.sleep(3)
+            continue
+        break
+    # Try register as fallback
+    for attempt in range(3):
+        resp = client.post("/auth/register", json={"email": email, "password": password})
+        if resp.status_code == 200:
+            return resp.json()["token"]
+        if resp.status_code == 429:
+            time.sleep(3)
+            continue
+        break
     assert resp.status_code == 200, f"Auth failed: {resp.text}"
     return resp.json()["token"]
 

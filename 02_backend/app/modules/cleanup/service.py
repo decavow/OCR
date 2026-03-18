@@ -24,17 +24,20 @@ class RetentionCleanupService:
             return {"expired_requests": 0, "files_moved": 0}
 
         files_moved = 0
+        requests_cleaned = 0
         for request in expired:
             files = self.file_repo.get_by_request(request.id)
             jobs = self.job_repo.get_by_request(request.id)
 
             # Move files to deleted bucket
+            has_failures = False
             for file in files:
                 if self.storage:
                     try:
                         await self._move_to_deleted(file.object_key, "uploads")
                     except Exception as e:
                         logger.error(f"Failed to move file {file.object_key}: {e}")
+                        has_failures = True
                         continue
                 self.file_repo.soft_delete(file)
                 files_moved += 1
@@ -46,12 +49,19 @@ class RetentionCleanupService:
                         await self._move_to_deleted(job.result_path, "results")
                     except Exception as e:
                         logger.error(f"Failed to move result {job.result_path}: {e}")
+                        has_failures = True
 
-            # Soft-delete request
-            self.request_repo.soft_delete(request)
+            # Only soft-delete request if all files moved successfully
+            if not has_failures:
+                self.request_repo.soft_delete(request)
+                requests_cleaned += 1
+            else:
+                logger.warning(
+                    f"Request {request.id}: skipped soft-delete due to file move failures"
+                )
 
-        logger.info(f"Cleanup: {len(expired)} expired requests, {files_moved} files moved")
-        return {"expired_requests": len(expired), "files_moved": files_moved}
+        logger.info(f"Cleanup: {requests_cleaned}/{len(expired)} expired requests, {files_moved} files moved")
+        return {"expired_requests": requests_cleaned, "files_moved": files_moved}
 
     async def purge_deleted(self, older_than_hours: int = 168) -> dict:
         """Permanently delete files from deleted bucket older than threshold."""
@@ -62,25 +72,33 @@ class RetentionCleanupService:
             return {"purged_requests": 0, "files_removed": 0}
 
         files_removed = 0
+        requests_purged = 0
         for request in purged:
             files = self.file_repo.get_by_request_include_deleted(request.id)
 
+            all_files_removed = True
             for file in files:
                 if self.storage:
                     try:
-                        deleted_key = f"deleted/{file.object_key}"
                         self.storage.client.remove_object(
                             self.storage.deleted_bucket, file.object_key
                         )
                         files_removed += 1
                     except Exception as e:
                         logger.warning(f"Failed to purge {file.object_key}: {e}")
+                        all_files_removed = False
 
-            # Hard delete from DB
-            self.request_repo.hard_delete(request)
+            # Only hard-delete from DB after all files successfully removed
+            if all_files_removed:
+                self.request_repo.hard_delete(request)
+                requests_purged += 1
+            else:
+                logger.warning(
+                    f"Request {request.id}: skipped hard-delete due to file removal failures"
+                )
 
-        logger.info(f"Purge: {len(purged)} requests, {files_removed} files removed")
-        return {"purged_requests": len(purged), "files_removed": files_removed}
+        logger.info(f"Purge: {requests_purged}/{len(purged)} requests, {files_removed} files removed")
+        return {"purged_requests": requests_purged, "files_removed": files_removed}
 
     async def _move_to_deleted(self, object_key: str, source_bucket: str) -> None:
         """Move object from source bucket to deleted bucket."""

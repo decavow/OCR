@@ -16,6 +16,8 @@ from app.clients.file_proxy_client import FileProxyClient
 from app.clients.orchestrator_client import OrchestratorClient
 from app.clients.heartbeat_client import HeartbeatClient
 from app.utils.errors import RetriableError, PermanentError
+from app.utils.cleanup import cleanup_local_files
+from app.utils.gpu_memory import cleanup_gpu_memory, log_gpu_memory
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,16 @@ class OCRWorker:
                     # No job available, continue polling
                     continue
 
+                # Re-check shutdown after pull_job returns
+                # (signal may have arrived while blocked in pull_job)
+                if self.shutdown.is_shutting_down:
+                    logger.info("Shutdown requested after pulling job, NAKing message")
+                    try:
+                        await self.queue.nak(job["_msg_id"])
+                    except Exception:
+                        pass
+                    break
+
                 # Process job
                 job_id_val = job.get("job_id", "")
                 token = job_id_ctx.set(job_id_val)
@@ -313,6 +325,13 @@ class OCRWorker:
 
         finally:
             self.state.end_job()
+            # Cleanup temp files and GPU memory after each job
+            try:
+                cleanup_local_files(job_id)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp files for job {job_id}: {e}")
+            cleanup_gpu_memory()
+            log_gpu_memory(f"after job {job_id[:8]}")
 
     async def _handle_failure(
         self,
@@ -339,6 +358,9 @@ class OCRWorker:
                 logger.error(f"Failed to report status: {e}")
         except Exception as e:
             logger.error(f"Failed to report status: {e}")
+
+        # Track error in state (reported via heartbeat)
+        self.state.record_error()
 
         # If backend doesn't know this job, terminate (don't retry)
         if job_not_found:

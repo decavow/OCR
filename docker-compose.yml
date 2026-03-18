@@ -32,6 +32,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     networks:
       - ocr-network
 
@@ -40,10 +44,19 @@ services:
     container_name: ocr-nats
     ports:
       - "${NATS_PORT}:4222"
-      - "${NATS_MONITOR_PORT}:8222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
     command: ["--jetstream", "--store_dir=/data", "-m", "8222"]
     volumes:
       - ./data/nats:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     networks:
       - ocr-network
 
@@ -68,12 +81,12 @@ services:
       # Format: type_id:access_key:methods:tiers (comma-separated for multiple)
       - SEED_SERVICES=${SEED_SERVICES}
       - CORS_ORIGINS=${CORS_ORIGINS}
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
     depends_on:
       minio:
         condition: service_healthy
       nats:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -81,6 +94,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     networks:
       - ocr-network
 
@@ -96,6 +113,15 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     networks:
       - ocr-network
 

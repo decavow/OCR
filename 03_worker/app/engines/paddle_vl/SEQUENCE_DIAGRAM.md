@@ -4,7 +4,7 @@
 
 ## Tổng quan
 
-Worker sử dụng PaddlePaddle PPStructure để phân tích layout tài liệu và trích xuất cấu trúc (text, title, table, list, figure). Có **fallback chain 4 cấp** khi engine chính thất bại.
+Worker sử dụng PaddlePaddle PPStructure/PPStructureV3 để phân tích layout tài liệu và trích xuất cấu trúc (text, title, table, list, figure). Có **fallback 2 tier** khi engine chính cho kết quả kém: Tier 1 (PPStructure) → Tier 2 (Pure OCR). Quality assessment chạy sau khi xử lý tất cả pages.
 
 ## Sequence Diagram chính
 
@@ -21,33 +21,38 @@ sequenceDiagram
     participant Proc as OCRProcessor
     participant Handler as StructuredExtractHandler
     participant Pre as preprocessing.py
-    participant PPStruct as PPStructure Engine
+    participant PPStruct as PPStructure/V3 Engine
     participant Post as postprocessing.py
+    participant Debug as DebugContext
 
-    Note over Main,Post: ===== PHASE 1: WORKER STARTUP =====
+    Note over Main,Debug: ===== PHASE 1: WORKER STARTUP =====
 
     Main->>Worker: OCRWorker(shutdown_handler)
     Worker->>Proc: OCRProcessor()
     Note right of Proc: OCR_ENGINE="paddle_vl"
     Proc->>Handler: StructuredExtractHandler(use_gpu, lang)
 
-    Handler->>PPStruct: PPStructure(table=True, use_gpu=True, lang="en")
-    Note right of PPStruct: Engine chính: layout analysis + table recognition
+    alt PaddleOCR v3.x
+        Handler->>PPStruct: PPStructureV3(lang="en")
+        Note right of PPStruct: v3: tự quản lý GPU, không có use_gpu param
+    else PaddleOCR v2.x
+        Handler->>PPStruct: PPStructure(use_gpu=True, lang="en",<br/>layout=True, table=True, ocr=True, show_log=False)
+    end
     PPStruct-->>Handler: primary engine ready
 
-    Note right of Handler: Fallback engines được lazy-init<br/>(chỉ khởi tạo khi cần)
+    Note right of Handler: Fallback OCR engine: lazy-init<br/>(chỉ khởi tạo khi Tier 1 fail quality check)
 
-    Worker->>Orch: POST /register<br/>{service_type, allowed_methods: ["structured_extract"],<br/>engine_info, supported_output_formats: ["json","md","txt"]}
+    Worker->>Orch: POST /register<br/>{service_type, allowed_methods: ["structured_extract"],<br/>engine_info, supported_output_formats: ["json","md","txt","html"]}
     Orch-->>Worker: {type_status: "APPROVED", access_key}
     Worker->>Queue: connect() → NATS JetStream<br/>stream="OCR_JOBS", subject filter
     Worker->>Worker: heartbeat.start()
 
-    Note over Main,Post: ===== PHASE 2: NHẬN JOB =====
+    Note over Main,Debug: ===== PHASE 2: NHẬN JOB =====
 
     Worker->>Queue: pull_job(timeout=5s)
     Queue-->>Worker: job = {job_id, file_id, method: "structured_extract", output_format: "json"}
 
-    Note over Main,Post: ===== PHASE 3: XỬ LÝ JOB =====
+    Note over Main,Debug: ===== PHASE 3: XỬ LÝ JOB =====
 
     Worker->>State: start_job(job_id)
     Worker->>Orch: PATCH /jobs/{job_id}/status {status: "PROCESSING"}
@@ -56,137 +61,158 @@ sequenceDiagram
 
     Worker->>Proc: process(file_bytes, "json", "structured_extract")
     Proc->>Handler: process(file_bytes, "json")
+    Handler->>Debug: DebugContext() (nếu DEBUG_OCR=true)
 
-    Note over Handler,Post: --- Preprocessing: Load & Upscale ---
+    Note over Handler,Debug: --- Preprocessing: Load images ---
 
     Handler->>Pre: load_images(file_bytes)
     alt File là PDF
-        Pre->>Pre: pdf2image.convert_from_bytes(dpi=300)
-        Pre->>Pre: Với mỗi trang: upscale nếu cần
-        Note right of Pre: MIN_SHORT_SIDE = 1500<br/>MAX_LONG_SIDE = 4000<br/>Resize để đảm bảo chất lượng OCR
-        Pre-->>Handler: images = [(np_array_page1, 1), (np_array_page2, 2), ...]
+        Pre->>Pre: pdf2image.convert_from_bytes(dpi=200)
+        Pre-->>Handler: images = [np_array_page1, np_array_page2, ...]
     else File là ảnh
-        Pre->>Pre: PIL.Image.open() → RGB
-        Pre->>Pre: Upscale nếu short_side < 1500
-        Pre->>Pre: np.array(image)
-        Pre-->>Handler: images = [(np_array, None)]
+        Pre->>Pre: PIL.Image.open() → RGB → np.array
+        Pre-->>Handler: images = [np_array]
     end
 
-    Note over Handler,Post: --- Inference: Xử lý từng trang ---
+    Note over Handler,Debug: --- Tier 1: Structured layout extraction ---
 
-    loop Với mỗi (image, page_num)
-        Handler->>Handler: _process_single_image(image)
+    loop Với mỗi (image, page_idx) trong images
+        Handler->>Debug: save_input_image(image, page_idx)
+        Handler->>Pre: prepare_image(image)
+        Note right of Pre: MIN_SHORT_SIDE = 960<br/>MAX_LONG_SIDE = 1280<br/>Downscale nếu long_side > 1280<br/>Upscale nếu short_side < 960
+        Pre-->>Handler: prepared image
 
-        Note over Handler,PPStruct: Thử engine chính (PPStructure + table)
-        Handler->>PPStruct: engine(image)
-        PPStruct-->>Handler: raw_result = [{type, bbox, res, ...}, ...]
+        alt PaddleOCR v3.x
+            Handler->>PPStruct: self.engine.predict(prepared)
+            PPStruct-->>Handler: raw_result (list)
+            Handler->>Post: extract_regions_v3(raw_result, page_idx)
+        else PaddleOCR v2.x
+            Handler->>PPStruct: self.engine(prepared)
+            PPStruct-->>Handler: raw_result = [{type, bbox, res, ...}, ...]
+            Handler->>Debug: save_raw_engine_output(raw_result, page_idx, "tier1")
+            Handler->>Post: extract_regions(raw_result, page_idx)
+        end
 
-        Handler->>Post: extract_regions(raw_result)
         Post->>Post: Parse từng region:
         Note right of Post: type="text" → extract text content<br/>type="title" → extract title<br/>type="table" → convert HTML to Markdown<br/>type="list" → extract list items<br/>type="figure" → mark as figure region
-        Post-->>Handler: regions = [{type, bbox, content, confidence}, ...]
+        Post-->>Handler: page_result = {page_number, regions: [{type, bbox, content, confidence}]}
 
-        Handler->>Post: assess_result_quality(regions)
-        Post->>Post: Kiểm tra: có regions? confidence đủ cao?
+        Handler->>Handler: all_pages.append(page_result)
 
-        alt Chất lượng ĐẠT
-            Post-->>Handler: quality = "good"
-            Handler->>Handler: Lưu kết quả trang này
-        else Chất lượng KHÔNG ĐẠT → Fallback Chain
-            Post-->>Handler: quality = "poor"
-            Note over Handler,PPStruct: Xem Fallback Chain diagram bên dưới
+        alt Multi-page document (len > 1)
+            Handler->>Handler: paddle.device.cuda.empty_cache()
+            Note right of Handler: Free GPU memory giữa các pages
         end
     end
 
-    Note over Handler,Post: --- Postprocessing: Format output ---
+    Note over Handler,Debug: --- Quality Assessment (sau TẤT CẢ pages) ---
 
-    Handler->>Post: format_output(all_page_results, "json")
+    Handler->>Post: assess_result_quality(all_pages)
+    Post->>Post: Kiểm tra: có regions không? có content không?
+
+    alt Chất lượng ĐẠT
+        Post-->>Handler: quality_ok = True
+        Note right of Handler: Dùng kết quả Tier 1
+    else Chất lượng KHÔNG ĐẠT → Tier 2 Fallback
+        Post-->>Handler: quality_ok = False
+
+        Note over Handler,Debug: --- Tier 2: Pure OCR fallback ---
+
+        Handler->>Handler: all_pages = [] (reset)
+        Handler->>Handler: _get_ocr_engine() → lazy init PaddleOCR
+
+        loop Với mỗi (image, page_idx) trong images
+            Handler->>Pre: prepare_image(image)
+            Pre-->>Handler: prepared
+
+            alt PaddleOCR v3.x
+                Handler->>Handler: ocr.predict(prepared)
+                Handler->>Post: extract_regions_v3_ocr_fallback(raw_ocr, page_idx)
+            else PaddleOCR v2.x
+                Handler->>Handler: ocr.ocr(prepared, cls=True)
+                alt OCR result is empty
+                    Handler->>Handler: page_result = {page_number, regions: []}
+                else Có kết quả
+                    Handler->>Post: extract_regions_from_raw_ocr(raw_ocr, page_idx)
+                end
+            end
+            Post-->>Handler: page_result
+            Handler->>Handler: all_pages.append(page_result)
+        end
+    end
+
+    Note over Handler,Debug: --- Postprocessing: Format output ---
+
+    Handler->>Debug: save_pipeline_summary()
+    Handler->>Post: format_structured_output(all_pages, "json")
     alt output_format == "json"
-        Post->>Post: JSON đầy đủ với regions, types, bboxes
+        Post->>Post: JSON đầy đủ với pages, regions, summary
         Post-->>Handler: json_bytes
     else output_format == "md"
-        Post->>Post: Markdown: # titles, paragraphs, | tables |
+        Post->>Post: Markdown: # titles, paragraphs, | tables |, page breaks
         Post-->>Handler: md_bytes
+    else output_format == "html"
+        Post->>Post: Full HTML document với embedded CSS
+        Post-->>Handler: html_bytes
     else output_format == "txt"
-        Post->>Post: Plain text, bỏ metadata
+        Post->>Post: Plain text, tables as markdown, figures as [Figure]
         Post-->>Handler: text_bytes
     end
 
     Handler-->>Proc: result_bytes
     Proc-->>Worker: result_bytes
 
-    Worker->>FP: POST /file-proxy/upload {job_id, file_id, base64(result)}
+    Worker->>Worker: Determine content_type:<br/>json→"application/json", md→"text/markdown",<br/>html→"text/html", txt→"text/plain"
+    Worker->>FP: POST /file-proxy/upload {job_id, file_id, base64(result), content_type}
     FP-->>Worker: {result_key}
     Worker->>Orch: PATCH /jobs/{job_id}/status {status: "COMPLETED", engine_version}
     Worker->>Queue: ack(msg_id)
+
+    Note over Worker,State: Cleanup (finally block)
     Worker->>State: end_job()
+    State-->>Worker: current_job_id=None, status="idle", files_completed++
 ```
 
-## Fallback Chain (Chi tiết)
-
-Đây là cơ chế quan trọng nhất của `paddle_vl` — khi engine chính cho kết quả kém, tự động thử engine đơn giản hơn.
+## Fallback Chain (2 Tiers)
 
 ```mermaid
 %%{init: {'theme': 'default'}}%%
 sequenceDiagram
     autonumber
     participant Handler as StructuredExtractHandler
-    participant Engine1 as PPStructure<br/>(table=True, GPU)
-    participant Engine2 as PPStructure<br/>(table=False, GPU)
-    participant Engine3 as PaddleOCR<br/>(GPU)
-    participant Engine4 as PaddleOCR<br/>(CPU)
+    participant Engine1 as PPStructure/V3<br/>(layout + table + OCR)
+    participant Engine2 as PaddleOCR<br/>(pure OCR, lazy-init)
     participant Post as postprocessing.py
 
-    Note over Handler,Post: Fallback Chain — thử lần lượt cho đến khi đạt chất lượng
+    Note over Handler,Post: Tier 1 → Tier 2 fallback (đánh giá sau tất cả pages)
 
     rect
-        Note over Handler,Engine1: Level 1: Full PPStructure (table + layout)
-        Handler->>Engine1: engine(image)
-        Engine1-->>Handler: result
-        Handler->>Post: assess_result_quality(result)
+        Note over Handler,Engine1: Tier 1: PPStructure/PPStructureV3 (full layout analysis)
+        loop Mỗi page
+            Handler->>Engine1: engine(prepared_image)
+            Engine1-->>Handler: raw_result (layout regions)
+            Handler->>Post: extract_regions / extract_regions_v3
+            Post-->>Handler: page_result = {page_number, regions}
+        end
+
+        Handler->>Post: assess_result_quality(all_pages)
         alt Chất lượng OK
-            Post-->>Handler: ✅ Dùng kết quả này
-        else Kết quả kém / lỗi
-            Post-->>Handler: ❌ Thử level tiếp theo
+            Post-->>Handler: True → dùng kết quả Tier 1
+        else Kết quả kém (empty/no content)
+            Post-->>Handler: False → chuyển sang Tier 2
         end
     end
 
     rect
-        Note over Handler,Engine2: Level 2: PPStructure (layout only, không table)
-        Handler->>Handler: Lazy init: PPStructure(table=False, use_gpu=True)
-        Handler->>Engine2: engine(image)
-        Engine2-->>Handler: result
-        Handler->>Post: assess_result_quality(result)
-        alt Chất lượng OK
-            Post-->>Handler: ✅ Dùng kết quả này
-        else Kết quả kém / lỗi
-            Post-->>Handler: ❌ Thử level tiếp theo
+        Note over Handler,Engine2: Tier 2: Pure OCR fallback (text-only, no layout)
+        Handler->>Engine2: _get_ocr_engine() → lazy init
+        loop Mỗi page
+            Handler->>Engine2: ocr(prepared_image)
+            Engine2-->>Handler: raw_ocr_result
+            Handler->>Post: extract_regions_from_raw_ocr / extract_regions_v3_ocr_fallback
+            Post-->>Handler: page_result (text regions only)
         end
-    end
-
-    rect
-        Note over Handler,Engine3: Level 3: Pure OCR (PaddleOCR GPU)
-        Handler->>Handler: Lazy init: PaddleOCR(use_gpu=True)
-        Handler->>Engine3: ocr(image)
-        Engine3-->>Handler: ocr_result
-        Handler->>Handler: Wrap thành regions format
-        alt Có kết quả
-            Handler->>Handler: ✅ Dùng kết quả này
-        else Vẫn lỗi
-            Handler->>Handler: ❌ Thử level cuối
-        end
-    end
-
-    rect
-        Note over Handler,Engine4: Level 4: Pure OCR (PaddleOCR CPU) — Last resort
-        Handler->>Handler: Lazy init: PaddleOCR(use_gpu=False)
-        Handler->>Engine4: ocr(image)
-        Engine4-->>Handler: ocr_result
-        alt Có kết quả
-            Handler->>Handler: ✅ Dùng kết quả này (CPU fallback)
-        else Hoàn toàn thất bại
-            Handler->>Handler: ❌ Raise PermanentError
-        end
+        Note right of Handler: Nếu Tier 2 cũng không có kết quả:<br/>regions = [] (empty), không raise error
     end
 ```
 
@@ -207,7 +233,7 @@ sequenceDiagram
     alt Có HTML table
         Post->>Conv: html_table_to_markdown(html_string)
         Conv->>Conv: Parse HTML table structure
-        Conv->>Conv: Extract headers + rows
+        Conv->>Conv: Extract headers + rows (xử lý colspan/rowspan)
         Conv->>Conv: Format: | col1 | col2 |
         Conv->>Conv: Add separator: |---|---|
         alt Parse thành công
@@ -216,7 +242,7 @@ sequenceDiagram
             Conv-->>Post: Fallback → plain text từ cells
         end
     else Không có HTML
-        Post->>Post: Lấy text content trực tiếp
+        Post->>Post: Lấy text content trực tiếp từ rec_texts
     end
 
     Post-->>Post: region = {type: "table", content: markdown_or_text, confidence}
@@ -228,14 +254,14 @@ sequenceDiagram
 | Field | Type | Mô tả |
 |-------|------|--------|
 | `file_bytes` | `bytes` | Ảnh hoặc PDF |
-| `output_format` | `str` | `"json"`, `"md"`, hoặc `"txt"` |
+| `output_format` | `str` | `"json"`, `"md"`, `"html"`, hoặc `"txt"` |
 
 ### Image Preprocessing Parameters
 | Parameter | Giá trị | Mô tả |
 |-----------|---------|--------|
-| `MIN_SHORT_SIDE` | 1500 | Cạnh ngắn tối thiểu (upscale nếu nhỏ hơn) |
-| `MAX_LONG_SIDE` | 4000 | Cạnh dài tối đa (downscale nếu lớn hơn) |
-| PDF DPI | 300 | Resolution khi convert PDF sang ảnh |
+| `MIN_SHORT_SIDE` | 960 | Cạnh ngắn tối thiểu (upscale nếu nhỏ hơn) |
+| `MAX_LONG_SIDE` | 1280 | Cạnh dài tối đa (downscale nếu lớn hơn) |
+| PDF DPI | 200 | Resolution khi convert PDF sang ảnh (pdf2image) |
 
 ### Region Types
 | Type | Mô tả | Content Format |
@@ -251,7 +277,7 @@ sequenceDiagram
 {
   "pages": [
     {
-      "page": 1,
+      "page_number": 1,
       "regions": [
         {
           "type": "title",
@@ -267,15 +293,19 @@ sequenceDiagram
         },
         {
           "type": "table",
-          "content": "| Col1 | Col2 |\n|---|---|\n| val1 | val2 |",
-          "confidence": 0.88,
+          "html": "<table>...</table>",
+          "markdown": "| Col1 | Col2 |\n|---|---|\n| val1 | val2 |",
           "bbox": [x1, y1, x2, y2]
         }
-      ],
-      "full_text": "Tổng hợp text trang 1"
+      ]
     }
   ],
-  "full_text": "Tổng hợp tất cả trang"
+  "summary": {
+    "total_pages": 1,
+    "total_regions": 12,
+    "tables_found": 2,
+    "text_blocks": 8
+  }
 }
 ```
 
@@ -288,24 +318,42 @@ Nội dung đoạn văn...
 | Col1 | Col2 |
 |---|---|
 | val1 | val2 |
+
+---
+```
+
+### Output (HTML)
+```html
+<!DOCTYPE html>
+<html>
+<head><title>OCR Result</title><style>/* embedded CSS */</style></head>
+<body>
+  <h1>Tiêu đề</h1>
+  <table>...</table>
+  <p>Nội dung</p>
+  <div class="page-break">Page 2</div>
+</body>
+</html>
 ```
 
 ### Output (TXT)
 ```
 Tiêu đề tài liệu
 Nội dung đoạn văn...
-Col1  Col2
-val1  val2
+| Col1 | Col2 |
+|---|---|
+| val1 | val2 |
 ```
 
-## Fallback Chain Summary
+## Fallback Summary
 
-| Level | Engine | GPU | Table Support | Khi nào dùng |
-|:-----:|--------|:---:|:---:|--------------|
-| 1 | PPStructure(table=True) | ✅ | ✅ | Mặc định — đầy đủ nhất |
-| 2 | PPStructure(table=False) | ✅ | ❌ | Table engine lỗi |
-| 3 | PaddleOCR | ✅ | ❌ | Layout analysis lỗi |
-| 4 | PaddleOCR | ❌ | ❌ | GPU lỗi hoàn toàn |
+| Tier | Engine | Khi nào dùng |
+|:----:|--------|--------------|
+| 1 | PPStructure/PPStructureV3 (layout + table + OCR) | Mặc định — đầy đủ nhất |
+| 2 | PaddleOCR (pure OCR, lazy-init) | Tier 1 quality assessment fail |
+
+> **Note:** Trước đây có 4-level fallback (PPStructure table → no-table → OCR GPU → OCR CPU).
+> Code hiện tại đã đơn giản hóa thành 2 tiers. Quality assessment chạy sau tất cả pages (không per-page).
 
 ## Error Classification
 
@@ -315,18 +363,19 @@ val1  val2
 | `DownloadError`, `UploadError` | Retriable | NAK + retry 5s |
 | `InvalidImageError` | Permanent | TERM |
 | `PDFSyntaxError` | Permanent | TERM |
-| Tất cả 4 fallback levels fail | Permanent | TERM |
+| Unexpected Exception | Retriable | NAK + retry (conservative) |
+| 404 Job not found | — | TERM (stale message) |
 
 ## So sánh với các engine khác
 
 | Tiêu chí | paddle_vl | paddle_text | tesseract |
 |-----------|-----------|-------------|-----------|
-| Method | `structured_extract` | `ocr_text_raw` | `ocr_text_raw` |
+| Method | `structured_extract` | `ocr_paddle_text` | `ocr_tesseract_text` |
 | Layout Analysis | ✅ | ❌ | ❌ |
 | Table Recognition | ✅ (HTML→MD) | ❌ | ❌ |
-| Multi-page PDF | ✅ | ❌ | ✅ |
-| Fallback Chain | 4 levels | Không | Không |
-| Output formats | json, md, txt | json, txt | json, txt |
-| GPU required | Có (fallback CPU) | Có | Không |
-| Image upscaling | ✅ (1500-4000px) | ❌ | ❌ |
+| Multi-page PDF | ✅ | ✅ | ✅ |
+| Fallback Chain | 2 tiers | Không | Không |
+| Output formats | json, md, html, txt | json, txt | json, txt |
+| GPU required | Có (fallback trong pure OCR) | Có | Không |
+| Image preprocessing | Upscale/downscale (960-1280px) | Không | Không |
 | Phù hợp cho | Tài liệu phức tạp, bảng, form | Text đơn giản | CPU-only, multi-page |

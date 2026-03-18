@@ -397,6 +397,62 @@ class TestHandleFailure:
 
         worker.queue.term.assert_awaited_once_with("msg-1")
 
+    # WJ-022: record_error() called on failure
+    @pytest.mark.asyncio
+    async def test_record_error_called(self):
+        worker, _ = _make_worker()
+        worker.state = MagicMock()
+        error = Exception("something broke")
+
+        await worker._handle_failure("j-1", "msg-1", error, retriable=True)
+
+        worker.state.record_error.assert_called_once()
+
+    # WJ-023: record_error increments error_count in heartbeat
+    @pytest.mark.asyncio
+    async def test_record_error_increments_count(self):
+        from app.core.state import WorkerState
+        worker, _ = _make_worker()
+        worker.state = WorkerState()
+
+        await worker._handle_failure("j-1", "msg-1", Exception("err1"), retriable=True)
+        assert worker.state.error_count == 1
+
+        await worker._handle_failure("j-2", "msg-2", Exception("err2"), retriable=False)
+        assert worker.state.error_count == 2
+
+    # WJ-024: record_error called even when orchestrator returns 404
+    @pytest.mark.asyncio
+    async def test_record_error_on_job_not_found(self):
+        worker, _ = _make_worker()
+        worker.state = MagicMock()
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        worker.orchestrator.update_status = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                message="Not Found",
+                request=MagicMock(),
+                response=mock_resp,
+            )
+        )
+
+        await worker._handle_failure("j-1", "msg-1", Exception("err"), retriable=True)
+
+        worker.state.record_error.assert_called_once()
+
+    # WJ-025: error_count reflected in heartbeat payload
+    @pytest.mark.asyncio
+    async def test_error_count_in_heartbeat_payload(self):
+        from app.core.state import WorkerState
+        worker, _ = _make_worker()
+        worker.state = WorkerState()
+
+        await worker._handle_failure("j-1", "msg-1", Exception("err"), retriable=True)
+
+        heartbeat = worker.state.to_heartbeat()
+        assert heartbeat["error_count"] == 1
+
 
 class TestRunLoop:
     """WJ-017 to WJ-021: run loop behavior."""

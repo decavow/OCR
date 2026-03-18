@@ -36,8 +36,8 @@ class RequestDetailResponse(RequestResponse):
 
 @router.get("", response_model=RequestListResponse)
 async def get_requests(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None, description="Filter by status (PROCESSING, COMPLETED, FAILED, etc.)"),
     method: Optional[str] = Query(None, description="Filter by OCR method (ocr_paddle_text, ocr_tesseract_text, etc.)"),
     date_from: Optional[datetime] = Query(None, description="Filter by created_at >= date_from (ISO 8601)"),

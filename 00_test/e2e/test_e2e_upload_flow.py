@@ -10,6 +10,7 @@ import pytest
 from .helpers import upload_file, upload_multiple_files, simulate_worker_process_job, wait_for_status
 
 
+@pytest.mark.usefixtures("refresh_worker")
 class TestUploadSingleFile:
     """Upload a single file and verify job creation."""
 
@@ -45,6 +46,7 @@ class TestUploadSingleFile:
         assert detail_data["jobs"][0]["status"] == "QUEUED"
 
 
+@pytest.mark.usefixtures("refresh_worker")
 class TestFullOCRLifecycle:
     """Complete flow: Upload → Worker processes → User gets result."""
 
@@ -141,6 +143,7 @@ class TestFullOCRLifecycle:
         assert b"Downloadable result" in dl_resp.content
 
 
+@pytest.mark.usefixtures("refresh_worker")
 class TestMultiFileUpload:
     """Upload multiple files in one request."""
 
@@ -191,6 +194,7 @@ class TestMultiFileUpload:
         assert result["completed_files"] >= 1
 
 
+@pytest.mark.usefixtures("refresh_worker")
 class TestUploadWithPDF:
     """Upload PDF file."""
 
