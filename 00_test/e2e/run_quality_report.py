@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""
+OCR Quality Report Generator — Run all capability tests and produce a report.
+
+Usage:
+  python run_quality_report.py                    # Run all quality tests
+  python run_quality_report.py --cap a1           # Run only A1 tests
+  python run_quality_report.py --cap b1           # Run only B1 table tests
+  python run_quality_report.py --save-baselines   # Save baselines for regression
+
+Output: quality_report_YYYY-MM-DD.md in current directory.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).parent
+REPORT_DIR = SCRIPT_DIR / ".." / ".." / "04_docs" / "08-quality-reports"
+
+
+def run_pytest(test_files: list[str], markers: str = "",
+               extra_args: list[str] | None = None) -> dict:
+    """Run pytest and capture structured results."""
+    cmd = [
+        sys.executable, "-m", "pytest",
+        "-v", "--tb=short", "--no-header",
+        "-p", "no:cacheprovider",
+    ]
+    if markers:
+        cmd.extend(["-m", markers])
+    cmd.extend(test_files)
+    if extra_args:
+        cmd.extend(extra_args)
+
+    # Run with JSON report if available
+    json_report_path = str(SCRIPT_DIR / ".quality_results.json")
+    cmd.extend([
+        f"--junitxml={SCRIPT_DIR / '.quality_results.xml'}",
+    ])
+
+    print(f"\n{'='*70}")
+    print(f"Running: {' '.join(cmd[-3:])}")
+    print(f"{'='*70}\n")
+
+    result = subprocess.run(
+        cmd,
+        cwd=str(SCRIPT_DIR),
+        capture_output=False,
+        text=True,
+        timeout=1200,  # 20 min max
+    )
+
+    return {
+        "returncode": result.returncode,
+        "test_files": test_files,
+    }
+
+
+def parse_junit_xml(xml_path: str) -> dict:
+    """Parse JUnit XML for test results summary."""
+    import xml.etree.ElementTree as ET
+
+    if not os.path.exists(xml_path):
+        return {"error": "No XML report found"}
+
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    results = {
+        "total": 0,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "tests": [],
+    }
+
+    for suite in root.iter("testsuite"):
+        results["total"] += int(suite.get("tests", 0))
+        results["failed"] += int(suite.get("failures", 0))
+        results["errors"] += int(suite.get("errors", 0))
+        results["skipped"] += int(suite.get("skipped", 0))
+
+    results["passed"] = (
+        results["total"] - results["failed"] -
+        results["errors"] - results["skipped"]
+    )
+
+    for tc in root.iter("testcase"):
+        test_info = {
+            "name": tc.get("name", ""),
+            "classname": tc.get("classname", ""),
+            "time": float(tc.get("time", 0)),
+            "status": "PASS",
+        }
+        if tc.find("failure") is not None:
+            test_info["status"] = "FAIL"
+            test_info["message"] = tc.find("failure").get("message", "")[:200]
+        elif tc.find("error") is not None:
+            test_info["status"] = "ERROR"
+            test_info["message"] = tc.find("error").get("message", "")[:200]
+        elif tc.find("skipped") is not None:
+            test_info["status"] = "SKIP"
+            test_info["message"] = tc.find("skipped").get("message", "")[:200]
+
+        results["tests"].append(test_info)
+
+    return results
+
+
+def classify_test_capability(test_name: str, classname: str) -> str:
+    """Map test to OCR capability."""
+    name_lower = (test_name + classname).lower()
+
+    if "table" in name_lower or "tb0" in name_lower or "b1" in name_lower:
+        return "B1"
+    if "a2" in name_lower or "layout" in name_lower or "heading" in name_lower:
+        if "vl" in name_lower or "structured" in name_lower or "region" in name_lower:
+            return "A2"
+    if "vietnamese" in name_lower or "unicode" in name_lower or "diacrit" in name_lower:
+        return "A1-VI"
+    if "regression" in name_lower:
+        return "Regression"
+    if "cross_engine" in name_lower or "cross" in name_lower:
+        return "Cross-Engine"
+    if "gpu" in name_lower or "stability" in name_lower:
+        return "GPU"
+    if "eq0" in name_lower:
+        # EQ-001 to EQ-010: A1 PaddleText
+        m = re.search(r"eq0(\d+)", name_lower)
+        if m:
+            num = int(m.group(1))
+            if num <= 10:
+                return "A1"
+            if num <= 20:
+                return "A1-Tesseract"
+            if num <= 30:
+                return "A2"
+            if num <= 40:
+                return "Cross-Engine"
+            if num <= 50:
+                return "Regression"
+            if num <= 59:
+                return "A2"
+            return "A1-VI"
+    if "evl" in name_lower:
+        return "A2"
+    if "gs0" in name_lower:
+        return "GPU"
+
+    return "Other"
+
+
+def generate_report(all_results: dict, timestamp: str) -> str:
+    """Generate markdown quality report."""
+    lines = [
+        f"# OCR Quality Report — {timestamp}",
+        "",
+        "Auto-generated by `run_quality_report.py`.",
+        "",
+    ]
+
+    # Overall summary
+    total = all_results.get("total", 0)
+    passed = all_results.get("passed", 0)
+    failed = all_results.get("failed", 0)
+    skipped = all_results.get("skipped", 0)
+    errors = all_results.get("errors", 0)
+
+    pass_rate = passed / total * 100 if total > 0 else 0
+
+    lines.extend([
+        "## Overall Summary",
+        "",
+        f"| Metric | Value |",
+        f"|--------|------:|",
+        f"| Total Tests | {total} |",
+        f"| Passed | {passed} |",
+        f"| Failed | {failed} |",
+        f"| Skipped | {skipped} |",
+        f"| Errors | {errors} |",
+        f"| **Pass Rate** | **{pass_rate:.1f}%** |",
+        "",
+    ])
+
+    # Group by capability
+    cap_results = {}
+    for test in all_results.get("tests", []):
+        cap = classify_test_capability(test["name"], test.get("classname", ""))
+        cap_results.setdefault(cap, []).append(test)
+
+    lines.extend([
+        "## Results by Capability",
+        "",
+        "| Capability | Total | Pass | Fail | Skip | Pass Rate |",
+        "|:-----------|------:|-----:|-----:|-----:|----------:|",
+    ])
+
+    cap_order = ["A1", "A1-VI", "A1-Tesseract", "A2", "B1",
+                 "Cross-Engine", "Regression", "GPU", "Other"]
+    cap_names = {
+        "A1": "A1 Raw Text (PaddleOCR)",
+        "A1-VI": "A1 Vietnamese/Unicode",
+        "A1-Tesseract": "A1 Raw Text (Tesseract)",
+        "A2": "A2 Layout-Preserved",
+        "B1": "B1 Table Extraction",
+        "Cross-Engine": "Cross-Engine Comparison",
+        "Regression": "Regression Detection",
+        "GPU": "GPU Stability",
+        "Other": "Other",
+    }
+
+    for cap in cap_order:
+        tests = cap_results.get(cap, [])
+        if not tests:
+            continue
+        t_total = len(tests)
+        t_pass = sum(1 for t in tests if t["status"] == "PASS")
+        t_fail = sum(1 for t in tests if t["status"] == "FAIL")
+        t_skip = sum(1 for t in tests if t["status"] == "SKIP")
+        t_rate = t_pass / (t_total - t_skip) * 100 if (t_total - t_skip) > 0 else 0
+        cap_name = cap_names.get(cap, cap)
+        lines.append(
+            f"| {cap_name} | {t_total} | {t_pass} | {t_fail} | {t_skip} | {t_rate:.0f}% |"
+        )
+
+    lines.append("")
+
+    # Detailed results
+    lines.extend([
+        "## Detailed Results",
+        "",
+    ])
+
+    for cap in cap_order:
+        tests = cap_results.get(cap, [])
+        if not tests:
+            continue
+        cap_name = cap_names.get(cap, cap)
+        lines.extend([
+            f"### {cap_name}",
+            "",
+            "| Test | Status | Time |",
+            "|------|:------:|-----:|",
+        ])
+        for t in sorted(tests, key=lambda x: x["name"]):
+            status_icon = {
+                "PASS": "PASS",
+                "FAIL": "**FAIL**",
+                "SKIP": "SKIP",
+                "ERROR": "**ERROR**",
+            }.get(t["status"], t["status"])
+            lines.append(
+                f"| {t['name']} | {status_icon} | {t['time']:.1f}s |"
+            )
+        lines.append("")
+
+    # Failures detail
+    failures = [
+        t for t in all_results.get("tests", [])
+        if t["status"] in ("FAIL", "ERROR")
+    ]
+    if failures:
+        lines.extend([
+            "## Failures Detail",
+            "",
+        ])
+        for t in failures:
+            lines.extend([
+                f"### {t['name']}",
+                f"**Status:** {t['status']}",
+                f"**Class:** {t.get('classname', '')}",
+                f"**Message:** {t.get('message', 'N/A')}",
+                "",
+            ])
+
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="OCR Quality Report Generator")
+    parser.add_argument("--cap", help="Run specific capability (a1, a2, b1, gpu, all)",
+                        default="all")
+    parser.add_argument("--save-baselines", action="store_true",
+                        help="Force save baselines")
+    args = parser.parse_args()
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # Determine which test files to run
+    test_files = []
+    cap = args.cap.lower()
+
+    if cap in ("all", "a1", "a2", "cross", "regression", "vi"):
+        test_files.append(str(SCRIPT_DIR / "test_e2e_ocr_quality.py"))
+    if cap in ("all", "a2"):
+        test_files.append(str(SCRIPT_DIR / "test_e2e_paddle_vl_layout.py"))
+    if cap in ("all", "b1", "table"):
+        test_files.append(str(SCRIPT_DIR / "test_e2e_table_extraction.py"))
+    if cap in ("all", "real"):
+        test_files.append(str(SCRIPT_DIR / "test_e2e_real_ocr.py"))
+    if cap in ("all", "gpu"):
+        test_files.append(str(SCRIPT_DIR / "test_e2e_gpu_stability.py"))
+
+    if not test_files:
+        print(f"Unknown capability: {args.cap}")
+        print("Options: all, a1, a2, b1, table, gpu, real, cross, regression, vi")
+        sys.exit(1)
+
+    print(f"OCR Quality Report — {timestamp}")
+    print(f"Test files: {len(test_files)}")
+    for f in test_files:
+        print(f"  {os.path.basename(f)}")
+
+    # Run tests
+    run_pytest(test_files)
+
+    # Parse results
+    xml_path = str(SCRIPT_DIR / ".quality_results.xml")
+    results = parse_junit_xml(xml_path)
+
+    if "error" in results:
+        print(f"\nError: {results['error']}")
+        sys.exit(1)
+
+    # Generate report
+    report = generate_report(results, timestamp)
+
+    # Save report
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    report_path = REPORT_DIR / f"quality_report_{date_str}.md"
+    report_path.write_text(report, encoding="utf-8")
+
+    print(f"\n{'='*70}")
+    print(f"Report saved: {report_path}")
+    print(f"{'='*70}")
+
+    # Print summary to stdout
+    print(f"\n{report}")
+
+    # Return exit code based on failures
+    sys.exit(1 if results["failed"] > 0 or results["errors"] > 0 else 0)
+
+
+if __name__ == "__main__":
+    main()
