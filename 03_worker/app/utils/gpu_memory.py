@@ -144,3 +144,118 @@ def cleanup_gpu_memory() -> None:
         pass
     except Exception as e:
         logger.debug(f"GPU cache cleanup failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Torch-based GPU memory utilities (for Marker/Surya engine)
+# ---------------------------------------------------------------------------
+
+def get_torch_gpu_memory_info() -> dict:
+    """Get current GPU memory usage via PyTorch.
+
+    Returns dict with keys:
+        allocated_mb, reserved_mb, free_mb, total_mb, utilization_pct
+    Returns empty dict if torch/CUDA not available.
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return {}
+
+        allocated = torch.cuda.memory_allocated() / (1024 ** 2)
+        reserved = torch.cuda.memory_reserved() / (1024 ** 2)
+        total_mb = torch.cuda.get_device_properties(0).total_mem / (1024 ** 2)
+        free_mb = total_mb - reserved
+        utilization = (reserved / total_mb * 100) if total_mb > 0 else 0
+
+        return {
+            "allocated_mb": round(allocated, 1),
+            "reserved_mb": round(reserved, 1),
+            "free_mb": round(free_mb, 1),
+            "total_mb": round(total_mb, 1),
+            "utilization_pct": round(utilization, 1),
+        }
+    except Exception as e:
+        logger.debug(f"Cannot get torch GPU memory info: {e}")
+        return {}
+
+
+def log_torch_gpu_memory(context: str = "") -> None:
+    """Log current GPU memory usage (torch backend)."""
+    info = get_torch_gpu_memory_info()
+    if not info:
+        return
+    prefix = f"[{context}] " if context else ""
+    logger.info(
+        f"{prefix}GPU memory (torch): "
+        f"allocated={info['allocated_mb']:.0f}MB, "
+        f"reserved={info['reserved_mb']:.0f}MB, "
+        f"free={info['free_mb']:.0f}MB, "
+        f"total={info['total_mb']:.0f}MB "
+        f"({info['utilization_pct']:.1f}% used)"
+    )
+
+
+def set_torch_gpu_memory_fraction() -> None:
+    """Set torch GPU memory fraction limit to prevent OOM.
+
+    Reads GPU_MEMORY_FRACTION env var (default: 0.85).
+    Must be called BEFORE any model initialization.
+    """
+    fraction = float(os.getenv("GPU_MEMORY_FRACTION", str(_DEFAULT_MEMORY_FRACTION)))
+    fraction = max(0.1, min(1.0, fraction))
+
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            logger.info("CUDA not available (torch), skipping GPU memory fraction")
+            return
+
+        torch.cuda.set_per_process_memory_fraction(fraction)
+        logger.info(f"Torch GPU memory fraction set to {fraction:.0%}")
+    except ImportError:
+        logger.debug("PyTorch not installed, skipping torch GPU memory config")
+    except Exception as e:
+        logger.warning(f"Failed to set torch GPU memory fraction: {e}")
+
+
+def check_torch_gpu_available(min_free_mb: float = 512) -> bool:
+    """Check if enough GPU memory is available (torch backend).
+
+    Args:
+        min_free_mb: Minimum free GPU memory required (default 512MB).
+
+    Returns:
+        True if enough memory available or if GPU info unavailable.
+    """
+    info = get_torch_gpu_memory_info()
+    if not info or info["total_mb"] == 0:
+        return True
+
+    if info["free_mb"] < min_free_mb:
+        logger.warning(
+            f"Low GPU memory (torch): {info['free_mb']:.0f}MB free "
+            f"(need {min_free_mb:.0f}MB). OOM risk!"
+        )
+        return False
+
+    logger.info(f"Torch GPU memory check OK: {info['free_mb']:.0f}MB free")
+    return True
+
+
+def cleanup_torch_gpu_memory() -> None:
+    """Aggressively free GPU memory (torch backend).
+
+    Clears CUDA cache and runs Python garbage collection.
+    """
+    import gc
+    gc.collect()
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"Torch GPU cache cleanup failed: {e}")

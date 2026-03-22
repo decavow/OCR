@@ -308,12 +308,15 @@ Giải phóng model
 - Output: JSON object chứa danh sách blocks + metadata
 
 ---
-
 ## Worker: `ocr_text_formatted (Marker)`
 
 ### Mục đích
 
-Trích xuất text giữ nguyên cấu trúc document: reading order, cột, headings, bảng, lists. Output là Markdown hoặc HTML có cấu trúc.
+Trích xuất text giữ nguyên cấu trúc document: reading order, cột, headings, bảng, lists. Output là Markdown hoặc HTML có cấu trúc, kèm confidence score để người dùng đánh giá độ tin cậy.
+
+**Input được hỗ trợ**: PDF, ảnh scan chất lượng cao, ảnh chụp màn hình báo cáo.
+
+**Ngôn ngữ**: Tiếng Anh + Tiếng Việt (set `languages=["en", "vi"]` khi gọi Marker để tối ưu nhận dạng dấu tiếng Việt).
 
 ### Model sử dụng
 
@@ -327,6 +330,7 @@ Trích xuất text giữ nguyên cấu trúc document: reading order, cột, hea
 **Tại sao chọn model này**:
 - Output Markdown trực tiếp — đúng nhu cầu A2
 - Xử lý tốt multi-column, tables, equations
+- Hỗ trợ tiếng Việt (dấu phức tạp: ư, ơ, ă, các dấu thanh chồng)
 - Active community (50K+ GitHub stars kết hợp Marker + Surya)
 
 **VRAM budget**: ~3.5 GB trung bình, ~5 GB peak (với batch=8).
@@ -348,34 +352,83 @@ Trích xuất text giữ nguyên cấu trúc document: reading order, cột, hea
 
 **Nếu vẫn OOM trên trang đặc biệt phức tạp**: giảm batch về 4.
 
-### Processing flow
+### Batch processing strategy
+
+Worker này được thiết kế cho chế độ **batch-then-shutdown**: nhận toàn bộ queue tài liệu, xử lý hết, rồi tắt để nhường VRAM cho worker tiếp theo.
+
+**Nguyên tắc quan trọng**:
+- **Model resident trong suốt batch**: Load Marker models 1 lần duy nhất khi worker khởi động, giữ trên GPU cho đến khi xử lý hết queue. KHÔNG load/unload model mỗi file — Marker models mất ~15-30 giây để load, gây bottleneck nghiêm trọng nếu lặp lại.
+- **Subprocess isolation**: Chạy worker trong một subprocess riêng biệt. Khi batch hoàn thành, kill subprocess luôn (không chỉ `gc.collect()` + `torch.cuda.empty_cache()`) để đảm bảo CUDA context được giải phóng sạch, tránh memory leak.
+- **Queue manager điều phối**: Một orchestrator ở trên quản lý thứ tự: khởi động subprocess OCR → OCR xử lý hết queue → subprocess OCR exit → orchestrator khởi động worker tiếp theo.
 
 ```
-Ảnh đã preprocessing
+Queue manager nhận toàn bộ files từ user
     │
     ▼
-Set env vars cho batch size
+Spawn subprocess cho OCR worker
     │
     ▼
-Load Marker models (~4-5 GB VRAM peak)
+[Trong subprocess]
+Set env vars cho batch size + languages
     │
     ▼
-Chạy Marker converter (detect → layout → recognize → table → assemble)
+Load Marker models 1 lần (~4-5 GB VRAM peak)
     │
     ▼
-Thu thập kết quả: Markdown string + extracted images (nếu có)
+Loop qua từng file trong queue:
+    ├── Chạy Marker converter (detect → layout → recognize → table → assemble)
+    ├── Tính confidence score (heuristic)
+    ├── Lưu kết quả: Markdown string + confidence + extracted images
+    └── Log progress (file X/N hoàn thành)
     │
     ▼
-Giải phóng models (gc + empty_cache)
+Tất cả files đã xử lý xong
+    │
+    ▼
+Subprocess exit (VRAM giải phóng hoàn toàn)
+    │
+    ▼
+Queue manager khởi động worker tiếp theo
 ```
 
-### Postprocessing
+### Confidence score (Heuristic)
+
+Vì Marker không expose confidence score trực tiếp ở output cuối, sử dụng heuristic dựa trên các tín hiệu gián tiếp. Đủ dùng cho mục đích "flag tài liệu cần review thủ công".
+
+**Các tín hiệu đo lường**:
+1. **Tỷ lệ ký tự lạ/unknown**: Đếm ký tự ngoài charset kỳ vọng (Latin + Vietnamese). Tỷ lệ cao = output không đáng tin.
+2. **Độ dài trung bình của word**: Word quá ngắn (1 char liên tục) hoặc quá dài (>25 chars không khoảng trắng) thường là lỗi nhận dạng.
+3. **Tỷ lệ whitespace bất thường**: Quá nhiều hoặc quá ít whitespace so với document thông thường → layout analysis có vấn đề.
+4. **Tỷ lệ dòng trống/rỗng**: Nhiều dòng trống liên tiếp gợi ý vùng không nhận dạng được.
+
+**Output format**:
+```json
+{
+  "confidence": 0.85,
+  "flags": ["high_unknown_char_ratio", "abnormal_whitespace"],
+  "details": {
+    "unknown_char_ratio": 0.12,
+    "avg_word_length": 4.2,
+    "whitespace_ratio": 0.45,
+    "empty_line_ratio": 0.08
+  }
+}
+```
+
+**Ngưỡng gợi ý**:
+- `confidence >= 0.8`: Kết quả đáng tin, dùng trực tiếp
+- `0.5 <= confidence < 0.8`: Nên review thủ công
+- `confidence < 0.5`: Khả năng cao cần xử lý lại hoặc input chất lượng kém
+
+### Output formats
 
 **Cho output `md`**:
-- Normalize heading levels (tránh nhảy h1 → h4)
-- Merge paragraphs bị ngắt thừa (do hard line break trong PDF)
-- Clean table formatting (align cột, fix cell merge sai)
-- Loại page numbers, running headers nếu lặp lại mỗi trang
+- Raw Markdown từ Marker
+- Postprocessing (iterate sau khi có test data thực tế):
+  - Normalize heading levels (tránh nhảy h1 → h4)
+  - Merge paragraphs bị ngắt thừa (do hard line break trong PDF)
+  - Clean table formatting (align cột, fix cell merge sai)
+  - Loại page numbers, running headers nếu lặp lại mỗi trang
 - Output: Markdown string
 
 **Cho output `html`**:
@@ -386,6 +439,13 @@ Giải phóng models (gc + empty_cache)
 **Cho output `json`**:
 - Parse Markdown thành cấu trúc: list of blocks, mỗi block = `{type: heading|paragraph|table|list|figure, content, level}`
 - Output: structured JSON
+
+### Thứ tự ưu tiên implement
+
+1. **Happy path**: PDF + ảnh scan chất lượng cao qua Marker, output Markdown, lưu kết quả. Set `languages=["en", "vi"]`.
+2. **Batch orchestration**: Queue, subprocess isolation, progress tracking.
+3. **Confidence score heuristic**: Gắn vào output mỗi file.
+4. **Postprocessing refinement**: Normalize heading, merge paragraph, clean table — cần test data thực tế mới biết cần fix gì.
 
 ---
 

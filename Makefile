@@ -47,12 +47,16 @@ worker-paddle-vl:
 worker-tesseract:
 	$(MAKE) -C 03_worker up-tesseract
 
-workers: worker-paddle worker-paddle-vl worker-tesseract
+worker-marker:
+	$(MAKE) -C 03_worker up-marker
+
+workers: worker-paddle worker-paddle-vl worker-tesseract worker-marker
 
 workers-down:
 	$(MAKE) -C 03_worker down-paddle
 	$(MAKE) -C 03_worker down-paddle-vl
 	$(MAKE) -C 03_worker down-tesseract
+	$(MAKE) -C 03_worker down-marker
 
 workers-build:
 	$(MAKE) -C 03_worker build-all

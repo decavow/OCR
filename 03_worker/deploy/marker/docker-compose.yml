@@ -1,0 +1,33 @@
+# OCR Worker - Marker Formatted Text Extraction (GPU)
+#
+# Prerequisites: build base image first
+#   cd 03_worker && make build-base-gpu
+#
+# Usage (from project root):
+#   docker compose -f 03_worker/deploy/marker/docker-compose.yml up -d
+#   docker compose -f 03_worker/deploy/marker/docker-compose.yml down
+
+services:
+  worker-marker:
+    build:
+      context: ../..
+      dockerfile: deploy/marker/Dockerfile
+    image: ocr-worker-marker:latest
+    env_file:
+      - ../../../.env
+      - .env
+    stop_grace_period: 60s
+    networks:
+      - ocr-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  ocr-network:
+    external: true
+    name: ocr-network

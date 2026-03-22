@@ -16,6 +16,13 @@ export async function getResultUrl(id: string): Promise<PresignedUrlResponse> {
   return response.data
 }
 
+export async function previewOriginal(id: string): Promise<Blob> {
+  const response = await client.get(`/files/${id}/preview`, {
+    responseType: 'blob',
+  })
+  return response.data
+}
+
 export async function downloadFile(id: string, type: 'original' | 'result' = 'result'): Promise<Blob> {
   const response = await client.get(`/files/${id}/download`, {
     params: { type },

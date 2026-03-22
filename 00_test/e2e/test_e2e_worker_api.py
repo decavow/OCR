@@ -12,6 +12,7 @@ class TestWorkerRegistration:
         service_type = f"e2e-test-{uuid.uuid4().hex[:8]}"
         instance_id = f"e2e-inst-{uuid.uuid4().hex[:8]}"
 
+
         resp = anon_client.post("/internal/register", json={
             "service_type": service_type,
             "instance_id": instance_id,
@@ -83,6 +84,8 @@ class TestWorkerDeregister:
         # Register first
         service_type = f"e2e-dereg-{uuid.uuid4().hex[:8]}"
         instance_id = f"e2e-inst-{uuid.uuid4().hex[:8]}"
+
+
         anon_client.post("/internal/register", json={
             "service_type": service_type,
             "instance_id": instance_id,

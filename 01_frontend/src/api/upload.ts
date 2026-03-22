@@ -32,16 +32,14 @@ export async function uploadFiles(
     formData.append('files', file)
   })
 
-  // Build query params
-  const params = new URLSearchParams({
-    output_format: config.output_format,
-    retention_hours: config.retention_hours.toString(),
-    method: config.method,
-    tier: config.tier.toString(),
-  })
+  // Add config as form fields (backend reads Form(), not query params)
+  formData.append('output_format', config.output_format)
+  formData.append('retention_hours', config.retention_hours.toString())
+  formData.append('method', config.method)
+  formData.append('tier', config.tier.toString())
 
   const response = await client.post<UploadResponse>(
-    `/upload?${params.toString()}`,
+    `/upload`,
     formData,
     {
       headers: {

@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 ENGINE_PADDLE = "paddle"
 ENGINE_TESSERACT = "tesseract"
 ENGINE_PADDLE_VL = "paddle_vl"
+ENGINE_MARKER = "marker"
 
 
 def create_handler(engine: str, use_gpu: bool, lang: str) -> BaseHandler:
@@ -22,6 +23,9 @@ def create_handler(engine: str, use_gpu: bool, lang: str) -> BaseHandler:
     elif engine == ENGINE_PADDLE_VL:
         from app.engines.paddle_vl import StructuredExtractHandler
         return StructuredExtractHandler(use_gpu=use_gpu, lang=lang)
+    elif engine == ENGINE_MARKER:
+        from app.engines.marker import FormattedTextHandler
+        return FormattedTextHandler(use_gpu=use_gpu, lang=lang)
     else:
         # Default: PaddleOCR
         from app.engines.paddle_text import TextRawHandler
@@ -55,6 +59,10 @@ class OCRProcessor:
         elif engine == ENGINE_TESSERACT:
             self.handlers = {
                 "ocr_tesseract_text": create_handler(engine, use_gpu, lang),
+            }
+        elif engine == ENGINE_MARKER:
+            self.handlers = {
+                "ocr_marker": create_handler(engine, use_gpu, lang),
             }
         else:
             # Default: PaddleOCR

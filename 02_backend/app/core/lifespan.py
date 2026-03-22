@@ -148,9 +148,9 @@ def seed_services(seed_config: str) -> None:
     NOTE: Seed services are a DEV CONVENIENCE for local development.
     In production, workers register dynamically and admin approves.
 
-    Format: type_id:access_key:methods:tiers[:formats];...
-    Example: ocr-text-tier0:sk_local_text_tier0:ocr_paddle_text:0
-             ocr-paddle-vl:sk_local_paddle_vl:structured_extract:0:json,md,txt
+    Format: type_id:access_key:methods:tiers[:formats[:display_name]];...
+    Example: tesseract:sk_local:ocr_tesseract_text:0:txt,json:raw_text_extract(tesseract)
+             marker:sk_local:ocr_marker:0:md,html,json:structure_text_extract(marker)
 
     Seeded types are pre-approved with access_key already set.
     """
@@ -165,7 +165,7 @@ def seed_services(seed_config: str) -> None:
 
             parts = entry.split(":")
             if len(parts) < 4:
-                logger.warning(f"Invalid seed entry (expected type_id:access_key:methods:tiers[:formats]): {entry}")
+                logger.warning(f"Invalid seed entry (expected type_id:access_key:methods:tiers[:formats[:display_name]]): {entry}")
                 continue
 
             type_id = parts[0]
@@ -173,10 +173,11 @@ def seed_services(seed_config: str) -> None:
             methods = parts[2].split(",")
             tiers = [int(t) for t in parts[3].split(",")]
             formats = parts[4].split(",") if len(parts) > 4 else ["txt", "json"]
+            display_name = parts[5] if len(parts) > 5 else type_id
 
             service_type_repo.create_or_update(
                 type_id=type_id,
-                display_name=f"Seeded: {type_id}",
+                display_name=display_name,
                 description="Auto-seeded for local development",
                 allowed_methods=methods,
                 allowed_tiers=tiers,
@@ -184,7 +185,7 @@ def seed_services(seed_config: str) -> None:
                 status=ServiceTypeStatus.APPROVED,  # Pre-approved
                 access_key=access_key,              # Pre-set key
             )
-            logger.info(f"Seeded service type: {type_id} (APPROVED)")
+            logger.info(f"Seeded service type: {type_id} → {display_name} (APPROVED)")
 
     except Exception as e:
         logger.error(f"Error seeding service types: {e}")

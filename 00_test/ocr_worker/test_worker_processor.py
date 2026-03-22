@@ -45,6 +45,7 @@ def _install_engine_mocks():
     mock_text_handler = MagicMock()
     mock_tess_handler = MagicMock()
     mock_vl_handler = MagicMock()
+    mock_marker_handler = MagicMock()
 
     # paddle_text
     paddle_text_mod = ModuleType("app.engines.paddle_text")
@@ -64,11 +65,18 @@ def _install_engine_mocks():
     vl_handler = ModuleType("app.engines.paddle_vl.handler")
     vl_handler.StructuredExtractHandler = mock_vl_handler
 
+    # marker
+    marker_mod = ModuleType("app.engines.marker")
+    marker_mod.FormattedTextHandler = mock_marker_handler
+    marker_handler = ModuleType("app.engines.marker.handler")
+    marker_handler.FormattedTextHandler = mock_marker_handler
+
     saved = {}
     for key in [
         "app.engines.paddle_text", "app.engines.paddle_text.handler",
         "app.engines.tesseract", "app.engines.tesseract.handler",
         "app.engines.paddle_vl", "app.engines.paddle_vl.handler",
+        "app.engines.marker", "app.engines.marker.handler",
     ]:
         saved[key] = sys.modules.get(key)
 
@@ -78,8 +86,10 @@ def _install_engine_mocks():
     sys.modules["app.engines.tesseract.handler"] = tess_handler
     sys.modules["app.engines.paddle_vl"] = vl_mod
     sys.modules["app.engines.paddle_vl.handler"] = vl_handler
+    sys.modules["app.engines.marker"] = marker_mod
+    sys.modules["app.engines.marker.handler"] = marker_handler
 
-    return mock_text_handler, mock_tess_handler, mock_vl_handler, saved
+    return mock_text_handler, mock_tess_handler, mock_vl_handler, mock_marker_handler, saved
 
 
 def _restore_modules(saved):
@@ -105,18 +115,25 @@ class TestProcessorInit:
         assert "ocr_paddle_text" in processor.handlers
         assert processor.use_gpu is True
 
-    # WP-002: tesseract engine forces gpu=False
+    # WP-002: tesseract engine forces gpu=False and registers ocr_tesseract_text
     def test_init_tesseract_no_gpu(self):
         processor, handler = _make_processor(engine="tesseract", use_gpu="true")
         assert processor.engine == "tesseract"
         assert processor.use_gpu is False
-        assert "ocr_paddle_text" in processor.handlers
+        assert "ocr_tesseract_text" in processor.handlers
 
     # WP-003: paddle_vl registers structured_extract method
     def test_init_paddle_vl(self):
         processor, handler = _make_processor(engine="paddle_vl")
         assert processor.engine == "paddle_vl"
         assert "structured_extract" in processor.handlers
+        assert "ocr_paddle_text" not in processor.handlers
+
+    # WP-003b: marker registers ocr_marker method
+    def test_init_marker(self):
+        processor, handler = _make_processor(engine="marker")
+        assert processor.engine == "marker"
+        assert "ocr_marker" in processor.handlers
         assert "ocr_paddle_text" not in processor.handlers
 
 
@@ -151,6 +168,16 @@ class TestProcessorProcess:
         handler.process.assert_awaited_once_with(b"pdf bytes", "json")
         assert result == b"ocr result"
 
+    # WP-006b: process with marker and ocr_marker
+    @pytest.mark.asyncio
+    async def test_process_marker(self):
+        processor, handler = _make_processor(engine="marker")
+
+        result = await processor.process(b"pdf bytes", "md", "ocr_marker")
+
+        handler.process.assert_awaited_once_with(b"pdf bytes", "md")
+        assert result == b"ocr result"
+
 
 class TestProcessorEngineInfo:
     """WP-007: get_engine_info."""
@@ -171,7 +198,7 @@ class TestCreateHandler:
 
     # WP-008: create_handler paddle -> TextRawHandler
     def test_create_handler_paddle(self):
-        mock_text, mock_tess, mock_vl, saved = _install_engine_mocks()
+        mock_text, mock_tess, mock_vl, mock_marker, saved = _install_engine_mocks()
         try:
             from app.core.processor import create_handler, ENGINE_PADDLE
             handler = create_handler(ENGINE_PADDLE, use_gpu=True, lang="en")
@@ -181,7 +208,7 @@ class TestCreateHandler:
 
     # WP-009: create_handler tesseract -> TextRawTesseractHandler
     def test_create_handler_tesseract(self):
-        mock_text, mock_tess, mock_vl, saved = _install_engine_mocks()
+        mock_text, mock_tess, mock_vl, mock_marker, saved = _install_engine_mocks()
         try:
             from app.core.processor import create_handler, ENGINE_TESSERACT
             handler = create_handler(ENGINE_TESSERACT, use_gpu=False, lang="en")
@@ -191,7 +218,7 @@ class TestCreateHandler:
 
     # WP-010: create_handler paddle_vl -> StructuredExtractHandler
     def test_create_handler_paddle_vl(self):
-        mock_text, mock_tess, mock_vl, saved = _install_engine_mocks()
+        mock_text, mock_tess, mock_vl, mock_marker, saved = _install_engine_mocks()
         try:
             from app.core.processor import create_handler, ENGINE_PADDLE_VL
             handler = create_handler(ENGINE_PADDLE_VL, use_gpu=True, lang="en")
@@ -201,10 +228,20 @@ class TestCreateHandler:
 
     # WP-011: create_handler unknown defaults to paddle
     def test_create_handler_unknown_defaults_paddle(self):
-        mock_text, mock_tess, mock_vl, saved = _install_engine_mocks()
+        mock_text, mock_tess, mock_vl, mock_marker, saved = _install_engine_mocks()
         try:
             from app.core.processor import create_handler
             handler = create_handler("unknown_engine", use_gpu=False, lang="vi")
             mock_text.assert_called_once_with(use_gpu=False, lang="vi")
+        finally:
+            _restore_modules(saved)
+
+    # WP-012: create_handler marker -> FormattedTextHandler
+    def test_create_handler_marker(self):
+        mock_text, mock_tess, mock_vl, mock_marker, saved = _install_engine_mocks()
+        try:
+            from app.core.processor import create_handler, ENGINE_MARKER
+            handler = create_handler(ENGINE_MARKER, use_gpu=True, lang="vi")
+            mock_marker.assert_called_once_with(use_gpu=True, lang="vi")
         finally:
             _restore_modules(saved)

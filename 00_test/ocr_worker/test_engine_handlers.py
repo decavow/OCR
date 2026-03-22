@@ -132,7 +132,8 @@ class TestTextRawHandler:
         info = handler.get_engine_info()
 
         assert info["engine"] == "paddleocr"
-        assert info["version"] == "2.7.3"
+        # Version comes from importlib.metadata; mocked paddleocr → "unknown"
+        assert isinstance(info["version"], str)
         assert info["lang"] == "en"
         assert info["use_gpu"] is False
 
@@ -148,8 +149,8 @@ class TestTextRawHandler:
             [[[0, 25], [100, 25], [100, 45], [0, 45]], ("Second line", 0.88)],
         ]]
 
-        with patch("app.engines.paddle_text.handler.load_image") as mock_load:
-            mock_load.return_value = (np.zeros((100, 100, 3), dtype=np.uint8), (100, 100))
+        with patch("app.engines.paddle_text.handler.load_images") as mock_load:
+            mock_load.return_value = [(np.zeros((100, 100, 3), dtype=np.uint8), (100, 100))]
             result = await handler.process(b"fake image", "txt")
 
         assert b"Hello World" in result
@@ -164,8 +165,8 @@ class TestTextRawHandler:
             [[[0, 0], [50, 0], [50, 15], [0, 15]], ("Test", 0.99)],
         ]]
 
-        with patch("app.engines.paddle_text.handler.load_image") as mock_load:
-            mock_load.return_value = (np.zeros((50, 50, 3), dtype=np.uint8), (50, 50))
+        with patch("app.engines.paddle_text.handler.load_images") as mock_load:
+            mock_load.return_value = [(np.zeros((50, 50, 3), dtype=np.uint8), (50, 50))]
             result = await handler.process(b"fake image", "json")
 
         parsed = json.loads(result)
@@ -290,7 +291,8 @@ class TestStructuredExtractHandler:
         info = handler.get_engine_info()
 
         assert info["engine"] == "paddleocr-vl"
-        assert info["version"] == "2.7.3"
+        # Version comes from importlib.metadata; mocked paddleocr → "unknown"
+        assert isinstance(info["version"], str)
         assert "capabilities" in info
         assert "layout_analysis" in info["capabilities"]
 
@@ -324,7 +326,7 @@ class TestStructuredExtractHandler:
         assert "pages" in parsed
         assert len(parsed["pages"]) == 1
 
-    # EH-011: process falls back when quality is poor
+    # EH-011: process falls back to pure OCR when quality is poor
     @pytest.mark.asyncio
     async def test_process_fallback_on_poor_quality(self):
         handler, mock_engine = self._make_handler()
@@ -332,43 +334,34 @@ class TestStructuredExtractHandler:
         # Primary returns empty -> poor quality
         mock_engine.return_value = []
 
-        # Set up fallback engine
-        mock_fallback = MagicMock()
-        mock_fallback.return_value = [
-            {
-                "type": "text",
-                "bbox": [0, 0, 100, 20],
-                "res": [{"text": "Fallback text", "confidence": 0.80}],
-            },
-        ]
-        handler._fallback_engine = mock_fallback
-
-        quality_calls = [False, True]  # First call poor, second OK
+        # Set up fallback OCR engine (lazy-loaded via _get_ocr_engine)
+        mock_ocr = MagicMock()
+        mock_ocr.ocr.return_value = [[
+            [[[0, 0], [100, 0], [100, 20], [0, 20]], ("Fallback text", 0.80)],
+        ]]
+        handler._ocr_engine = mock_ocr
 
         with patch("app.engines.paddle_vl.handler.load_images") as mock_load, \
              patch("app.engines.paddle_vl.handler.prepare_image") as mock_prep, \
-             patch("app.engines.paddle_vl.handler.assess_result_quality", side_effect=quality_calls), \
+             patch("app.engines.paddle_vl.handler.assess_result_quality", return_value=False), \
              patch("app.engines.paddle_vl.handler.DebugContext"):
             mock_load.return_value = [np.zeros((100, 100, 3), dtype=np.uint8)]
             mock_prep.side_effect = lambda x: x
 
             result = await handler.process(b"image", "txt")
 
-        # Fallback engine should have been used
-        assert mock_fallback.called
+        # Fallback OCR engine should have been used
+        mock_ocr.ocr.assert_called()
 
-    # EH-012: _run_engine catches IndexError and uses fallback
+    # EH-012: _run_engine catches IndexError and returns empty list
     def test_run_engine_fallback_on_error(self):
         handler, mock_engine = self._make_handler()
         mock_engine.side_effect = IndexError("table matcher crash")
 
-        mock_fallback = MagicMock()
-        mock_fallback.return_value = [{"type": "text", "res": []}]
-        handler._fallback_engine = mock_fallback
-
         result = handler._run_engine(np.zeros((50, 50, 3), dtype=np.uint8))
 
-        mock_fallback.assert_called_once()
+        # v2 _run_engine catches IndexError/ValueError and returns []
+        assert result == []
 
     # EH-013: _ocr_result_is_empty detects empty results
     def test_ocr_result_is_empty(self):
@@ -382,7 +375,7 @@ class TestStructuredExtractHandler:
         assert StructuredExtractHandler._ocr_result_is_empty([None, None]) is True
         assert StructuredExtractHandler._ocr_result_is_empty([[]]) is False
 
-    # EH-014: _run_pure_ocr delegates to OCR engine
+    # EH-014: _run_pure_ocr delegates to lazy-loaded OCR engine
     def test_run_pure_ocr(self):
         handler, _ = self._make_handler()
 
@@ -390,10 +383,11 @@ class TestStructuredExtractHandler:
         mock_ocr.ocr.return_value = [[
             [[[0, 0], [50, 0], [50, 15], [0, 15]], ("Pure OCR text", 0.97)],
         ]]
-        handler._ocr_engine_cpu = mock_ocr
+        # Set the lazy-loaded OCR engine directly
+        handler._ocr_engine = mock_ocr
 
         img = np.zeros((50, 50, 3), dtype=np.uint8)
-        result = handler._run_pure_ocr(img, use_gpu=False)
+        result = handler._run_pure_ocr(img)
 
         mock_ocr.ocr.assert_called_once_with(img, cls=True)
         assert len(result) == 1

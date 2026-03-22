@@ -80,6 +80,26 @@ export default function UploadConfig({ config, onChange, fileCount, onServicesLo
       .then((res) => {
         setServices(res.items)
         onServicesLoaded?.(res.items.length > 0)
+
+        // Auto-select first available method if current is not available
+        if (res.items.length > 0) {
+          const availableMethods = new Set<string>()
+          const availableTiers = new Set<number>()
+          for (const svc of res.items) {
+            for (const m of svc.allowed_methods) availableMethods.add(m)
+            for (const t of svc.allowed_tiers) availableTiers.add(t)
+          }
+          const updates: Partial<Config> = {}
+          if (!availableMethods.has(config.method)) {
+            updates.method = [...availableMethods][0]
+          }
+          if (!availableTiers.has(config.tier)) {
+            updates.tier = [...availableTiers][0]
+          }
+          if (Object.keys(updates).length > 0) {
+            onChange({ ...config, ...updates })
+          }
+        }
       })
       .catch(() => {
         setServices([])

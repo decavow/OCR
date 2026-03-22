@@ -4,7 +4,7 @@ import { useKeyboard } from '../hooks/useKeyboard'
 import { FileInfo, JobResult, Job } from '../types'
 import { getBatch } from '../api/batches'
 import { getJobResult } from '../api/jobs'
-import { getFile, getOriginalUrl } from '../api/files'
+import { getFile, previewOriginal } from '../api/files'
 import { Button as ShadcnButton } from '@/components/ui/button'
 import { ChevronLeft, ChevronRight, ArrowLeft, Copy } from 'lucide-react'
 import Loading from '../components/common/Loading'
@@ -45,8 +45,8 @@ export default function ResultViewerPage() {
       try {
         const fileInfo = await getFile(fileId)
         setFile(fileInfo)
-        const urlResponse = await getOriginalUrl(fileId)
-        setOriginalUrl(urlResponse.url)
+        const blob = await previewOriginal(fileId)
+        setOriginalUrl(URL.createObjectURL(blob))
         const currentJob = allJobs.find((j) => j.file_id === fileId)
         if (currentJob) {
           const resultData = await getJobResult(currentJob.id)

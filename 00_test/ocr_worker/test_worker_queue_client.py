@@ -183,7 +183,7 @@ class TestQueuePullJob:
         result = await client.pull_job()
         assert result is None
 
-    # QC-006: pull_job stores message for later ack/nak
+    # QC-006: pull_job stores message with timestamp for later ack/nak
     @pytest.mark.asyncio
     async def test_pull_job_stores_message(self):
         client = _make_client()
@@ -206,7 +206,11 @@ class TestQueuePullJob:
 
         msg_id = result["_msg_id"]
         assert msg_id in client._pending_messages
-        assert client._pending_messages[msg_id] is mock_msg
+        # _pending_messages stores (msg, timestamp) tuples
+        entry = client._pending_messages[msg_id]
+        assert isinstance(entry, tuple)
+        assert entry[0] is mock_msg
+        assert isinstance(entry[1], float)  # monotonic timestamp
 
 
 class TestQueueAckNakTerm:
@@ -218,7 +222,7 @@ class TestQueueAckNakTerm:
         client = _make_client()
         mock_msg = MagicMock()
         mock_msg.ack = AsyncMock()
-        client._pending_messages["msg-1"] = mock_msg
+        client._pending_messages["msg-1"] = (mock_msg, 1000.0)
 
         await client.ack("msg-1")
 
@@ -238,7 +242,7 @@ class TestQueueAckNakTerm:
         client = _make_client()
         mock_msg = MagicMock()
         mock_msg.nak = AsyncMock()
-        client._pending_messages["msg-2"] = mock_msg
+        client._pending_messages["msg-2"] = (mock_msg, 1000.0)
 
         await client.nak("msg-2", delay=5.0)
 
@@ -251,7 +255,7 @@ class TestQueueAckNakTerm:
         client = _make_client()
         mock_msg = MagicMock()
         mock_msg.nak = AsyncMock()
-        client._pending_messages["msg-3"] = mock_msg
+        client._pending_messages["msg-3"] = (mock_msg, 1000.0)
 
         await client.nak("msg-3")
 
@@ -264,7 +268,7 @@ class TestQueueAckNakTerm:
         client = _make_client()
         mock_msg = MagicMock()
         mock_msg.term = AsyncMock()
-        client._pending_messages["msg-4"] = mock_msg
+        client._pending_messages["msg-4"] = (mock_msg, 1000.0)
 
         await client.term("msg-4")
 

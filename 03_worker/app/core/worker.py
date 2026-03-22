@@ -17,7 +17,7 @@ from app.clients.orchestrator_client import OrchestratorClient
 from app.clients.heartbeat_client import HeartbeatClient
 from app.utils.errors import RetriableError, PermanentError
 from app.utils.cleanup import cleanup_local_files
-from app.utils.gpu_memory import cleanup_gpu_memory, log_gpu_memory
+from app.utils.gpu_memory import cleanup_gpu_memory, log_gpu_memory, cleanup_torch_gpu_memory
 
 logger = logging.getLogger(__name__)
 
@@ -330,8 +330,12 @@ class OCRWorker:
                 cleanup_local_files(job_id)
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp files for job {job_id}: {e}")
-            cleanup_gpu_memory()
-            log_gpu_memory(f"after job {job_id[:8]}")
+            # Use engine-appropriate GPU cleanup
+            if self.processor.engine == "marker":
+                cleanup_torch_gpu_memory()
+            else:
+                cleanup_gpu_memory()
+                log_gpu_memory(f"after job {job_id[:8]}")
 
     async def _handle_failure(
         self,

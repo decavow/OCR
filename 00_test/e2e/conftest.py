@@ -3,6 +3,9 @@ E2E test fixtures — real services, real HTTP.
 
 Requires running: Backend (8080), MinIO (9000), NATS (4222).
 Worker is simulated via internal API calls.
+
+IMPORTANT: All e2e-* service types and instances are cleaned up after
+the test session to avoid polluting the admin panel.
 """
 
 import os
@@ -216,3 +219,37 @@ def sample_pdf():
         b"trailer<</Size 4/Root 1 0 R>>\n"
         b"startxref\n190\n%%EOF"
     )
+
+
+# ─── Session cleanup: remove ALL e2e-* service types and instances ──────────
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_e2e_services(base_url, admin_token):
+    """After entire test session, delete all e2e-* service types and instances."""
+    yield  # run all tests first
+
+    with httpx.Client(base_url=base_url, timeout=10) as client:
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+        # Fetch all service types
+        resp = client.get("/admin/service-types", headers=admin_headers)
+        if resp.status_code != 200:
+            return
+
+        items = resp.json().get("items", [])
+        for svc in items:
+            svc_id = svc.get("id", "")
+            if not svc_id.startswith("e2e-"):
+                continue
+
+            # Delete service type (backend cascades instances)
+            del_resp = client.delete(
+                f"/admin/service-types/{svc_id}",
+                headers=admin_headers,
+            )
+            if del_resp.status_code == 200:
+                print(f"  [cleanup] Deleted e2e service type: {svc_id}")
+            else:
+                # Fallback: try disable first then delete
+                client.post(f"/admin/service-types/{svc_id}/disable", headers=admin_headers)
+                client.delete(f"/admin/service-types/{svc_id}", headers=admin_headers)
+                print(f"  [cleanup] Force-deleted e2e service type: {svc_id}")

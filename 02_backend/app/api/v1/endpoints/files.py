@@ -60,9 +60,13 @@ async def get_original_url(
     if not request or request.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Check if request has expired
-    if request.expires_at and datetime.now(timezone.utc) > request.expires_at:
-        raise HTTPException(status_code=410, detail="File has expired")
+    # Check if request has expired (handle both naive and aware datetimes from SQLite)
+    if request.expires_at:
+        expires_at = request.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
+            raise HTTPException(status_code=410, detail="File has expired")
 
     # Generate presigned URL
     expires = timedelta(hours=1)
@@ -100,9 +104,13 @@ async def get_result_url(
     if not request or request.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Check if request has expired
-    if request.expires_at and datetime.now(timezone.utc) > request.expires_at:
-        raise HTTPException(status_code=410, detail="File has expired")
+    # Check if request has expired (handle both naive and aware datetimes from SQLite)
+    if request.expires_at:
+        expires_at = request.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
+            raise HTTPException(status_code=410, detail="File has expired")
 
     # Get job for this file to find result_path
     job = job_repo.get_by_file(file_id)
@@ -126,6 +134,37 @@ async def get_result_url(
     return PresignedUrlResponse(
         url=url,
         expires_at=datetime.now(timezone.utc) + expires,
+    )
+
+
+@router.get("/{file_id}/preview")
+async def preview_file(
+    file_id: str,
+    db: Session = Depends(get_db),
+    storage=Depends(get_storage),
+    current_user=Depends(get_current_user),
+):
+    """Preview original file inline (proxied through backend, no CORS issues)."""
+    file_repo = FileRepository(db)
+    request_repo = RequestRepository(db)
+
+    file = file_repo.get_active(file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    request = request_repo.get_active(file.request_id)
+    if not request or request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        content = await storage.download(settings.minio_bucket_uploads, file.object_key)
+    except ObjectNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+
+    return Response(
+        content=content,
+        media_type=file.mime_type,
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

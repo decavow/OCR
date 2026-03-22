@@ -1,0 +1,5 @@
+# Marker engine dependencies (Surya OCR)
+marker-pdf>=1.0.0
+torch
+Pillow>=10.0.0
+markdown

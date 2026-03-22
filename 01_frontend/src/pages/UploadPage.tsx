@@ -12,7 +12,7 @@ export default function UploadPage() {
   const navigate = useNavigate()
   const { files, uploading, progress, error, addFiles, removeFile, upload } = useUpload()
   const [config, setConfig] = useState<Config>({
-    method: 'ocr_paddle_text',
+    method: '',
     tier: 0,
     output_format: 'txt',
     retention_hours: 168,

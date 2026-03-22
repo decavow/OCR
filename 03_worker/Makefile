@@ -20,8 +20,8 @@
 #   4. Add build-<name> and up-<name> targets below
 # uvicorn app.main:app --reload --port 8000
 
-.PHONY: build-base-gpu build-base-cpu build-paddle build-paddle-vl build-tesseract build-all
-.PHONY: up-paddle up-paddle-vl up-tesseract down-paddle down-paddle-vl down-tesseract
+.PHONY: build-base-gpu build-base-cpu build-paddle build-paddle-vl build-tesseract build-marker build-all
+.PHONY: up-paddle up-paddle-vl up-tesseract up-marker down-paddle down-paddle-vl down-tesseract down-marker
 
 # === Base Images ===
 
@@ -43,7 +43,10 @@ build-tesseract: build-base-cpu
 build-paddle-vl: build-base-gpu
 	docker build -f deploy/paddle-vl/Dockerfile -t ocr-worker-paddle-vl:latest .
 
-build-all: build-paddle build-paddle-vl build-tesseract
+build-marker: build-base-gpu
+	docker build -f deploy/marker/Dockerfile -t ocr-worker-marker:latest .
+
+build-all: build-paddle build-paddle-vl build-tesseract build-marker
 
 # === Run Workers ===
 
@@ -56,6 +59,9 @@ up-tesseract: build-base-cpu
 up-paddle-vl: build-base-gpu
 	docker compose -f deploy/paddle-vl/docker-compose.yml up -d --build
 
+up-marker: build-base-gpu
+	docker compose -f deploy/marker/docker-compose.yml up -d --build
+
 down-paddle:
 	docker compose -f deploy/paddle-text/docker-compose.yml down
 
@@ -64,6 +70,9 @@ down-paddle-vl:
 
 down-tesseract:
 	docker compose -f deploy/tesseract-cpu/docker-compose.yml down
+
+down-marker:
+	docker compose -f deploy/marker/docker-compose.yml down
 
 # === Logs ===
 
@@ -75,3 +84,6 @@ logs-paddle-vl:
 
 logs-tesseract:
 	docker compose -f deploy/tesseract-cpu/docker-compose.yml logs -f
+
+logs-marker:
+	docker compose -f deploy/marker/docker-compose.yml logs -f

@@ -19,9 +19,10 @@ export const RETENTION_OPTIONS = [1, 6, 12, 24, 168, 720] // 1h, 6h, 12h, 24h, 7
 
 // OCR method options
 export const METHOD_OPTIONS = [
-  { value: 'ocr_paddle_text', label: 'PaddleOCR Text', description: 'Extract raw text using PaddleOCR (GPU)' },
-  { value: 'ocr_tesseract_text', label: 'Tesseract Text', description: 'Extract raw text using Tesseract (CPU)' },
-  { value: 'structured_extract', label: 'Structured Extract (PaddleVL)', description: 'Layout analysis + structured data extraction' },
+  { value: 'ocr_paddle_text', label: 'raw_text_extract(paddle)', description: 'Raw text extraction using PaddleOCR (GPU)' },
+  { value: 'ocr_tesseract_text', label: 'raw_text_extract(tesseract)', description: 'Raw text extraction using Tesseract (CPU)' },
+  { value: 'structured_extract', label: 'structure_text_extract(paddle-vl)', description: 'Layout analysis + structured data extraction (GPU)' },
+  { value: 'ocr_marker', label: 'structure_text_extract(marker)', description: 'Formatted text with structure preservation — headings, tables, lists (GPU)' },
 ] as const
 
 // Tier options
@@ -42,4 +43,7 @@ export const PRICING: Record<string, number> = {
   'structured_extract:0': 3000,
   'structured_extract:1': 5000,
   'structured_extract:2': 8000,
+  'ocr_marker:0': 3000,
+  'ocr_marker:1': 5000,
+  'ocr_marker:2': 8000,
 }

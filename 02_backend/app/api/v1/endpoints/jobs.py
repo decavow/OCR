@@ -2,6 +2,7 @@
 
 import json
 import logging
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -190,10 +191,18 @@ async def download_job_result(
 
     content_type = "application/json" if ext == "json" else "text/plain"
 
+    # RFC 6266: use filename* for non-ASCII, fallback filename for ASCII
+    ascii_filename = f"result_{job_id[:8]}.{ext}"
+    encoded_filename = quote(filename)
+    content_disposition = (
+        f'attachment; filename="{ascii_filename}"; '
+        f"filename*=UTF-8''{encoded_filename}"
+    )
+
     return Response(
         content=content,
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        headers={"Content-Disposition": content_disposition}
     )
 
 

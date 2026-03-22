@@ -115,9 +115,10 @@ class TestPrepareImage:
         assert short_side >= MIN_SHORT_SIDE or max(h, w) >= MAX_LONG_SIDE
 
     def test_vp007_large_enough_no_change(self):
-        """VP-007: Image already meeting MIN_SHORT_SIDE is not modified."""
-        # Create image with short side = 1600 > MIN_SHORT_SIDE=1500
-        img = np.zeros((1600, 2000, 3), dtype=np.uint8)
+        """VP-007: Image meeting MIN_SHORT_SIDE but within MAX_LONG_SIDE is not modified."""
+        # Create image with short side >= MIN_SHORT_SIDE and long side <= MAX_LONG_SIDE
+        # MIN_SHORT_SIDE=960, MAX_LONG_SIDE=1280
+        img = np.zeros((960, 1200, 3), dtype=np.uint8)
         result = prepare_image(img)
 
         assert result.shape == img.shape

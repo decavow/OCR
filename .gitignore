@@ -65,6 +65,13 @@ coverage.xml
 # === Lock files ===
 /package-lock.json
 
+# === HuggingFace model cache ===
+*.safetensors
+*.onnx
+*.bin
+*.pt
+*.pth
+
 # === Project-specific ===
 collection_tool.py
 ocr.md
@@ -74,5 +81,6 @@ stitch_ocr_dashboard_upload/
 01_frontend/ocr-platform-mvp-1.zip
 claude/
 Model_testing/
+module_test/
 **_content.md
 **structure.md
